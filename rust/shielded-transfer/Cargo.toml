@@ -8,14 +8,13 @@ license = "Apache-2.0"
 audren-client = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
 audren-core = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
 base64 = "0.22"
-bincode = "1.3"
 bs58 = "0.5"
 rand = "0.8.5"
 serde_json = "1"
 solana-address = { version = "~2.7.0", features = ["curve25519"] }
-solana-compute-budget-interface = "3.0.0"
 solana-instruction = "3.5.0"
 solana-keypair = "3.1.2"
 solana-message = "4.5.0"
 solana-signer = "3.0.1"
 solana-transaction = { version = "4.2.0", features = ["serde", "wincode"] }
+wincode = "0.6"
