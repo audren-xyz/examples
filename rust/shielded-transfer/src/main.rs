@@ -3,7 +3,7 @@
 //! Demonstrates:
 //! 1. Reading `PoolState` (`192 B`) for Pool #0 (`5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`)
 //! 2. Shielding `0.005 SOL` into an unlinkable stealth note (`Tag 2: Deposit`)
-//! 3. Zero-indexer pure-RPC `getAccountInfo` `dataSlice[64..1120]` scanning
+//! 3. Standard Solana RPC `getAccountInfo` `dataSlice[64..1120]` note discovery
 //! 4. Building a Multi-Base Triptych (`m = 5`, 32-note ring) + Agave Bulletproof `Transfer`
 //!    split via `ProofBuffer` (`Tag 8` + `Tag 9`), with every transaction strictly `<= 1,232 B` MTU
 //!    and `100%` of buffer rent automatically refunded on execution
@@ -202,7 +202,7 @@ fn main() {
     .unwrap();
     send_and_confirm(&rpc_url, &payer, &[to_ix(&dep_ix)], 120_000, "Deposit(0.005 SOL)");
 
-    // 2. Scan EpochPage via pure-RPC dataSlice[64..1120] (zero indexer)
+    // 2. Scan EpochPage via standard RPC dataSlice[64..1120].
     let slice = get_account(&rpc_url, &page_pda, Some((PAGE_SCAN_OFFSET, PAGE_SCAN_LEN))).unwrap();
     let alice_fvk = alice.full_viewing_key();
     let hits = scan_page_dataslice(&alice_fvk, page_id, &slice).unwrap();

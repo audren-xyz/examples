@@ -1,9 +1,9 @@
 /**
- * Audren Example 3 — Zero-Indexer Pure-RPC `dataSlice[64..1120]` Scanner.
+ * Audren Example — Standard Solana RPC `dataSlice[64..1120]` Note Scanner.
  *
  * Reads live Audren Pool #0 (`5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`) directly
- * from any standard Solana JSON-RPC endpoint (Mainnet or Devnet) with zero third-party
- * dependencies and zero custom indexer.
+ * from any standard Solana JSON-RPC endpoint (Mainnet or Devnet) with zero external
+ * npm dependencies.
  *
  * Run:
  *   SOLANA_RPC_URL="https://your-solana-rpc" node typescript/dataslice-scanner/index.mjs
