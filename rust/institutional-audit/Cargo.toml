@@ -1,0 +1,11 @@
+[package]
+name = "audren-example-institutional-audit"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+audren-client = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
+audren-core = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
+rand = "0.8.5"
+solana-address = { version = "~2.7.0", features = ["curve25519"] }
