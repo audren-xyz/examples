@@ -2,7 +2,7 @@
 //!
 //! Demonstrates:
 //! 1. Reading `PoolState` (`192 B`) for Pool #0 (`5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`)
-//! 2. Shielding `0.005 SOL` into an unlinkable stealth note (`Tag 2: Deposit`) via Solana v1 tx (`0x81`)
+//! 2. Shielding `0.005 SOL` into a stealth-owned note (depositor, amount and output location are public) (`Tag 2: Deposit`) via Solana v1 tx (`0x81`)
 //! 3. Standard Solana RPC `getAccountInfo` `dataSlice[64..1120]` note discovery
 //! 4. Building & settling a Multi-Base Triptych (`m = 5`, 32-note ring) + Agave Bulletproof `Transfer`
 //!    directly in ONE Solana v1 transaction (`<= 4,096 B`, inline `TransactionConfig` compute budget,
