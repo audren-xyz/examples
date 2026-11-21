@@ -129,6 +129,18 @@ fn main() {
 
     // 5. Mode 1 Selective Disclosure Proof (Alice proves Bob received 100 USDC without exposing any other tx!)
     write_page_note(&mut page_bytes, 1, &note_pay.entry).unwrap();
+    PageHeader {
+        version: PROTOCOL_VERSION,
+        bump: 255,
+        closed: false,
+        count: 2,
+        pool_id,
+        page_id: 0,
+        created_slot: 1,
+        closed_slot: 0,
+    }
+    .encode(&mut page_bytes)
+    .unwrap();
     let mut disclosure = SelectiveDisclosureProof::from_prepared_note(0, 1, &note_pay);
     assert!(disclosure.verify().unwrap(), "standalone selective disclosure must verify");
     assert!(
