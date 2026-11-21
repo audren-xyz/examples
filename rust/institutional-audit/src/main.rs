@@ -117,7 +117,7 @@ fn main() {
     // 4. Parse `(S_1, S_2)` from the Triptych audited extension and `(M_1, M_2)` from the auditor asset proof
     // Wire layout of Transfer (`xfer_ix.data`):
     // tag(1) | m(1) | pay_note(193) | chg_note(193) | c_pay(32) | c_chg(32) |
-    // triptych(1344) | cross_base_2(256) | range_u128(736) | pq_len(2) | pq_env(0) | auditor_asset(192)
+    // triptych(1345) | cross_base_2(256) | range_u128(736) | pq_len(2) | pq_env(0) | auditor_asset(192)
     let triptych_off = 2 + 2 * NOTE_WIRE_LEN + 64;
     let base_triptych_len = triptych_proof_len(5, false).unwrap();
     let full_triptych_len = triptych_proof_len(5, true).unwrap();
