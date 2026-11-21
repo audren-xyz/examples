@@ -1,6 +1,6 @@
 # Audren Examples
 
-Runnable Rust and TypeScript integrations targeting the live Audren program on Solana Mainnet-Beta and Devnet using **Solana Transaction Version 1 (SIMD-0385, `0x81`, 4,096 B, inline `TransactionConfig`)**:
+Runnable Rust and TypeScript integrations targeting the live Audren program on Solana Mainnet and Devnet using **Solana Transaction Version 1 (SIMD-0385, `0x81`, 4,096 B, inline `TransactionConfig`)**:
 
 - **Program ID:** `AUDRBK6kVkQoEGm3EB7swd34SUPqrHZeNEkB5vZWVSv3`
 - **Canonical Pool `#0` (`Permissionless`) PDA:** `5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`
@@ -12,15 +12,15 @@ Runnable Rust and TypeScript integrations targeting the live Audren program on S
 | --- | --- | --- |
 | [`rust/shielded-transfer`](./rust/shielded-transfer) | Rust | Single-tx Solana v1 (`0x81`, 4,096 B) `Deposit`, Multi-Base Triptych + Agave Bulletproof `Transfer`, `dataSlice[64..1120]` note discovery, and `Withdraw` (zero legacy transactions) |
 | [`rust/institutional-audit`](./rust/institutional-audit) | Rust | `PoolMode::InstitutionalAudited` proof generation (`(S_1, S_2)` + `(M_1, M_2)`), per-tx `SelectiveDisclosureProof`, and offline `AuditorKeypair` decryption |
-| [`typescript/jupiter-private-swap`](./typescript/jupiter-private-swap) | Node 20+ (Zero deps) | Router-agnostic `SwapViaRouter` (`Tag 5`) single-tx Solana v1 integration with Jupiter v6 `/quote` + `/swap-instructions` (applicable to Orca, Raydium, Meteora, Phoenix, or custom routers) |
-| [`typescript/dataslice-scanner`](./typescript/dataslice-scanner) | Node 20+ (Zero deps) | Standard Solana RPC `getAccountInfo` (`PoolState` decode), `getMultipleAccounts` `dataSlice[64..1120]` batch scanning, and `programSubscribe` WebSocket payload |
+| [`typescript/jupiter-private-swap`](./typescript/jupiter-private-swap) | Node 20+ (Zero deps) | Offline router-account planning with illustrative addresses; optional live Jupiter quote only. No proof, swap-instruction fetch, signature or transaction submission |
+| [`typescript/dataslice-scanner`](./typescript/dataslice-scanner) | Node 20+ (Zero deps) | Standard Solana RPC `getAccountInfo` (`PoolState` decode), `getProgramAccounts` discovery with `dataSlice[64..1120]`, and `programSubscribe` WebSocket payload |
 
 ## Quickstart
 
 ### Node 20+ (Zero dependencies)
 
 ```bash
-# Quote & plan a single-tx Solana v1 private swap targeting Audren swap_escrow shard #0
+# Offline router-account mapping; sample addresses are not executable accounts
 node typescript/jupiter-private-swap/index.mjs
 
 # Inspect live Pool #0 and scan EpochPage dataSlice[64..1120]
@@ -42,3 +42,9 @@ cargo run --manifest-path rust/Cargo.toml -p audren-example-shielded-transfer
 ## License
 
 Apache-2.0. See [LICENSE](./LICENSE).
+
+## Scope and safety
+
+The scanner prints a WebSocket subscription payload; it does not open a subscription or decrypt private notes. The Jupiter example does not execute a private swap or measure transaction cost. Use the [protocol Rust client](https://github.com/audren-xyz/audren/tree/main/crates/client) for proof generation and the [TypeScript package](https://github.com/audren-xyz/audren/tree/main/packages/sdk) for reusable transaction helpers.
+
+The live Rust lifecycle submits transactions and spends network fees. Use a dedicated Devnet key and configured RPC provider. Never commit either. Audren is pre-audit and upgradeable; deposits, withdrawals and DEX trades retain public visibility boundaries.

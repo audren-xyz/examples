@@ -1,26 +1,14 @@
 /**
- * Audren Example 4 — Router-Agnostic Private Swap (`Tag 5: SwapViaRouter`) on Solana Transaction v1.
- *
- * Shows how ANY Solana DEX aggregator or AMM router (Jupiter, Orca, Raydium, Meteora,
- * Phoenix, Titan, DFlow, or a custom router) plugs directly into Audren's isolated
- * `swap_escrow` PDA inside a single Solana Transaction v1 (`0x81`, 4,096 B max size,
- * inline `TransactionConfig` compute budget — zero legacy transactions):
- *   1. Requests `/quote` + `/swap-instructions` with `userPublicKey = swapEscrowPda`
- *   2. Resolves `(escrowIdx, escrowInIdx, escrowOutIdx)` inside the returned router accounts
- *   3. Strips non-escrow signer flags so ONLY `swap_escrow` signs the external router CPI
- *      (`vault_auth` and `payer` are NEVER signers to any external router)
- *   4. Verifies single-tx Solana v1 fit (`<= 4,096 B`), falling back to `ProofBuffer` only
- *      for oversized multi-hop payloads exceeding 4,096 B
- *
- * Run:
- *   node typescript/jupiter-private-swap/index.mjs
+ * Offline router-account mapping with illustrative, non-executable addresses.
+ * Resolves escrow indices and strips outer signer flags. Does not generate a proof,
+ * fetch swap instructions, calculate transaction size, sign or submit a transaction.
+ * LIVE_QUOTE=1 fetches only a Jupiter quote; provider availability and policy apply.
+ * Run: node typescript/jupiter-private-swap/index.mjs
  */
 
 const AUDREN_PROGRAM_ID = 'AUDRBK6kVkQoEGm3EB7swd34SUPqrHZeNEkB5vZWVSv3';
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const SOLANA_TX_V1_MAX_SIZE = 4_096;
-const PROOF_BUFFER_CHUNK_SIZE = 768;
 
 // Example SwapEscrow Shard #0 address for Pool #0 (`["audren_escrow", 0u32_le, 0u8]`)
 // Derive deterministically via `audren_client::pda::derive_swap_escrow_pda(&AUDREN_PROGRAM_ID, 0, 0)`.
@@ -70,7 +58,9 @@ if (process.env.LIVE_QUOTE === '1') {
     amount: '10000000', // 10 USDC
     slippageBps: '50',
   });
-  const quote = await (await fetch(`${AGGREGATOR_API}/quote?${qs}`)).json();
+  const response = await fetch(`${AGGREGATOR_API}/quote?${qs}`);
+  if (!response.ok) throw new Error(`Quote request failed: HTTP ${response.status}`);
+  const quote = await response.json();
   console.log('Live Jupiter quote:', {
     inAmount: quote.inAmount,
     outAmount: quote.outAmount,
@@ -93,27 +83,11 @@ if (process.env.LIVE_QUOTE === '1') {
     sampleEscrowWsolAta,
   );
 
-  // Typical SwapViaRouter (m=5 + CrossBase1 + RangeU64 + 2 outputs + 160 B Jupiter route data) ≈ 2,290 B.
-  // With Solana Transaction v1 (4,096 B max, inline TransactionConfig), the entire swap settles in 1 tx!
-  const estimatedSwapPayloadBytes = 2_290;
-  const estimatedV1WireBytes = estimatedSwapPayloadBytes + 120 + (prepared.outerAccounts.length + 12) * 32;
-  const fitsSingleV1Tx = estimatedV1WireBytes <= SOLANA_TX_V1_MAX_SIZE;
-  const fallbackProofBufferChunks = fitsSingleV1Tx
-    ? 0
-    : Math.ceil(estimatedSwapPayloadBytes / PROOF_BUFFER_CHUNK_SIZE);
-
-  console.log('=== Audren SwapViaRouter (Tag 5) Solana v1 Execution Plan ===');
+  console.log('Offline router-account mapping (no transaction submitted)');
   console.log({
     audrenProgramId: AUDREN_PROGRAM_ID,
-    transactionVersion: 'v1 (0x81 · SIMD-0385 · inline TransactionConfig)',
     indices: prepared.indices,
     outerRouterAccountCount: prepared.outerAccounts.length,
     outerSigners: prepared.outerAccounts.filter((a) => a.isSigner).length,
-    estimatedSwapPayloadBytes,
-    estimatedV1WireBytes,
-    solanaV1MaxBytes: SOLANA_TX_V1_MAX_SIZE,
-    fitsSingleV1Tx,
-    fallbackProofBufferChunks,
-    audrenSwapOverheadCu: '~405,291 CU (leaves ~994,700 CU for Jupiter/Orca/Raydium route)',
   });
 }

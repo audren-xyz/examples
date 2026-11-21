@@ -56,7 +56,7 @@ const poolAcc = await rpc('getAccountInfo', [
   { encoding: 'base64', commitment: 'confirmed' },
 ]);
 if (!poolAcc.value) {
-  throw new Error(`Pool #0 (${POOL_0_PDA}) not found on ${rpcUrl}`);
+  throw new Error(`Pool #0 (${POOL_0_PDA}) not found on [configured RPC]`);
 }
 const pool = decodePoolState(Buffer.from(poolAcc.value.data[0], 'base64'));
 console.log('=== Audren Pool #0 Live State ===');

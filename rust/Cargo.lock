@@ -82,7 +82,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "audren-client"
 version = "0.1.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#aafe68a4a6077aa5b42548165948da7ba8efdf38"
+source = "git+https://github.com/audren-xyz/audren.git?rev=e14c37a97df7a5aaa46d28798c722640a1077254#e14c37a97df7a5aaa46d28798c722640a1077254"
 dependencies = [
  "aes-gcm",
  "audren-core",
@@ -101,7 +101,7 @@ dependencies = [
 [[package]]
 name = "audren-core"
 version = "0.1.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#aafe68a4a6077aa5b42548165948da7ba8efdf38"
+source = "git+https://github.com/audren-xyz/audren.git?rev=e14c37a97df7a5aaa46d28798c722640a1077254#e14c37a97df7a5aaa46d28798c722640a1077254"
 
 [[package]]
 name = "audren-example-institutional-audit"
