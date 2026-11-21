@@ -5,8 +5,8 @@ edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "ddd814728d333bea2815ebd0bf228e9655d9c60d" }
-audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "ddd814728d333bea2815ebd0bf228e9655d9c60d" }
+audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "939f2ec2a21a77a8e9e8eee3809415b888c28290" }
+audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "939f2ec2a21a77a8e9e8eee3809415b888c28290" }
 rand = "0.8.5"
 serde_json = "1"
 solana-address = { version = "~2.7.0", features = ["curve25519"] }

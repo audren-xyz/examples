@@ -10,6 +10,13 @@
 
 # Audren Examples
 
+<p>
+  <a href="https://github.com/audren-xyz/examples/actions/workflows/ci.yml"><img src="https://github.com/audren-xyz/examples/actions/workflows/ci.yml/badge.svg" alt="CI — 4-Language Parity" /></a>
+  <a href="https://github.com/audren-xyz/audren/actions/workflows/ci.yml"><img src="https://github.com/audren-xyz/audren/actions/workflows/ci.yml/badge.svg" alt="Audren Core & SDKs CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-434039" alt="Apache-2.0 License" /></a>
+  <a href="https://audren.xyz/developers/"><img src="https://img.shields.io/badge/docs-audren.xyz%2Fdevelopers-C83E2B" alt="Developers Docs" /></a>
+</p>
+
 Standardized, runnable examples across all **4 official Audren SDKs — Rust, TypeScript, Swift (iOS/macOS), and Kotlin (Android/JVM)** — speaking the exact same **6 building blocks** (`keys`, `PDAs & layouts`, `dataSlice scanner`, `local ZK prover`, `disclosure & audit`, `relayer & router`), importing the real SDK packages directly with zero hand-rolled constants or byte offsets, and verified in CI for **100% byte-for-byte canonical output parity across all 4 languages**.
 
 - **Program ID:** `AUDRBK6kVkQoEGm3EB7swd34SUPqrHZeNEkB5vZWVSv3`
@@ -83,6 +90,11 @@ SOLANA_RPC_URL="https://your-solana-rpc" pnpm --dir examples/typescript scan
 ```
 
 > Override the sibling `../audren` path at any time with `AUDREN_REPO_DIR=/path/to/audren`.
+
+## Empirical Verification & Continuous Parity
+
+- **Byte-for-byte 4-language CI parity ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)):** Every push and PR executes all 4 quickstarts against `spec/test-vectors.json` and runs `diff -u` asserting **`Rust == TypeScript == Kotlin`** on Ubuntu and **`Swift == Rust`** on macOS, plus `rust/institutional-audit`, `rust/shielded-transfer` (`cargo check`), and TypeScript `swap-plan` + `dataslice-scanner`.
+- **Real sBPFv3 on-chain SDK verification:** In [`audren-xyz/audren`](https://github.com/audren-xyz/audren), CI executes instructions produced by pure TypeScript (`@audren/sdk/prover`) and UniFFI (`audren-ffi`, backing Swift & Kotlin) directly inside LiteSVM against the verified Mainnet `v0.2.0` `audren.so` binary (`0aa268a9...`).
 
 ## Scope and safety
 
