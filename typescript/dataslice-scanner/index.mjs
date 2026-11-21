@@ -1,29 +1,30 @@
 /**
  * Audren Example — Standard Solana RPC `dataSlice[64..1120]` Note Scanner using `@audren/sdk`.
  *
- * Uses zero-dependency `@audren/sdk` primitives (`derivePoolPda`, `decodePoolState`,
- * `PAGE_SCAN_OFFSET`, `PAGE_SCAN_LEN`, `buildPageSubscribeWsPayload`) — zero hand-coded offsets.
+ * Uses zero-dependency `@audren/sdk` primitives (`derivePoolPda`, `deriveEpochPagePda`,
+ * `decodePoolState`, `PAGE_SCAN_DATA_SLICE`, `fetchPageScanSlices`, `buildPageSubscribeWsPayload`,
+ * `AudrenRelayClient`) — zero hand-rolled RPC filters, offsets, or decoders.
  *
  * Run (from `typescript/`):
  *   SOLANA_RPC_URL="https://your-solana-rpc" pnpm scan
  */
 
 import {
+  AUDREN_DEFAULT_RELAY_URL,
   AUDREN_PROGRAM_ID,
-  PAGE_LEN,
-  PAGE_MAGIC,
-  PAGE_OFF_POOL_ID,
-  PAGE_SCAN_LEN,
-  PAGE_SCAN_OFFSET,
+  AudrenRelayClient,
+  PAGE_CAPACITY,
+  PAGE_SCAN_DATA_SLICE,
   buildPageSubscribeWsPayload,
-  decodePageScanSlice,
   decodePoolState,
+  deriveEpochPagePda,
   derivePoolPda,
+  fetchPageScanSlices,
 } from '@audren/sdk';
 
-const rpcUrl = process.env.SOLANA_RPC_URL;
+const rpcUrl = process.env.SOLANA_RPC_URL ?? process.env.AUDREN_RPC_URL;
 if (!rpcUrl) {
-  console.error('Set SOLANA_RPC_URL to a Solana Mainnet or Devnet RPC URL.');
+  console.error('Set SOLANA_RPC_URL (or AUDREN_RPC_URL) to a Solana Mainnet or Devnet RPC URL.');
   process.exit(1);
 }
 
@@ -61,33 +62,30 @@ console.log({
   activeLanes: pool.activeLanes,
 });
 
-// 2. Discover EpochPages for Pool #0 using 1,056 B dataSlice[64..1120] (~83% bandwidth savings)
-const poolIdFilter = Buffer.alloc(4);
-poolIdFilter.writeUInt32LE(pool.poolId, 0);
-const pages = await rpc('getProgramAccounts', [
-  AUDREN_PROGRAM_ID,
-  {
-    encoding: 'base64',
-    commitment: 'confirmed',
-    dataSlice: { offset: PAGE_SCAN_OFFSET, length: PAGE_SCAN_LEN },
-    filters: [
-      { dataSize: PAGE_LEN },
-      { memcmp: { offset: 0, bytes: Buffer.from(PAGE_MAGIC).toString('base64'), encoding: 'base64' } },
-      { memcmp: { offset: PAGE_OFF_POOL_ID, bytes: poolIdFilter.toString('base64'), encoding: 'base64' } },
-    ],
-  },
-]);
+// 2. Fetch all Pool #0 EpochPage scan slices (1,056 B each, ~83% less bandwidth) via @audren/sdk
+const pageIds = [];
+for (let id = 0n; id <= pool.currentPageId; id++) {
+  pageIds.push(id);
+}
+const pagePdas = await Promise.all(
+  pageIds.map(async (id) => (await deriveEpochPagePda(pool.poolId, id)).address),
+);
+const slices = await fetchPageScanSlices(rpcUrl, pagePdas, 'confirmed', AUDREN_PROGRAM_ID);
 
-console.log(`\nScanned ${pages.length} EpochPage(s) using ${PAGE_SCAN_LEN} B dataSlice per page:`);
-for (const p of pages) {
-  const parsed = decodePageScanSlice(Buffer.from(p.account.data[0], 'base64'));
+console.log(
+  `\nFetched ${slices.filter(Boolean).length}/${pagePdas.length} EpochPage(s) via getMultipleAccounts ` +
+    `dataSlice[${PAGE_SCAN_DATA_SLICE.offset}..${PAGE_SCAN_DATA_SLICE.offset + PAGE_SCAN_DATA_SLICE.length}] (${PAGE_SCAN_DATA_SLICE.length} B/page):`,
+);
+for (let i = 0; i < slices.length; i++) {
+  const parsed = slices[i];
+  if (!parsed) continue;
   let populated = 0;
   for (const eph of parsed.ephemeralPks) {
     if (eph.every((b) => b === 0)) break;
     populated++;
   }
   console.log(
-    `  Page ${p.pubkey} | populated_slots=${populated}/32 | first_view_tags=[${Array.from(
+    `  Page #${pageIds[i]} (${pagePdas[i]}) | populated_slots=${populated}/${PAGE_CAPACITY} | first_view_tags=[${Array.from(
       parsed.viewTags.subarray(0, Math.min(populated, 6)),
     )
       .map((b) => '0x' + b.toString(16).padStart(2, '0'))
@@ -99,3 +97,18 @@ for (const p of pages) {
 const wsPayload = buildPageSubscribeWsPayload(AUDREN_PROGRAM_ID, pool.poolId);
 console.log('\n=== Real-Time Agave WebSocket programSubscribe Payload ===');
 console.log(JSON.stringify(wsPayload, null, 2));
+
+// 4. Query default Audren Privacy Relayer health/rent schedule via AudrenRelayClient
+try {
+  const relay = new AudrenRelayClient(process.env.AUDREN_RELAY_URL ?? AUDREN_DEFAULT_RELAY_URL);
+  const info = await relay.getInfo('mainnet');
+  console.log('\n=== Audren Privacy Relayer Info ===');
+  console.log({
+    relayUrl: relay.baseUrl,
+    cluster: info.cluster,
+    relayerPubkey: info.relayerPubkey,
+    nullifierRentLamports: info.rentSchedule?.nullifierRentLamports ?? null,
+  });
+} catch (err) {
+  console.log(`\n(Relayer info check skipped: ${err instanceof Error ? err.message : String(err)})`);
+}

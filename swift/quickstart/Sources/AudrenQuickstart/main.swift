@@ -4,7 +4,8 @@ import Foundation
 // Audren Canonical 6-Building-Block Quickstart (Swift SDK — iOS 15+ / macOS 13+).
 //
 // Executes the exact same 6 building blocks mirrored across Rust, TypeScript, Swift, and Kotlin
-// using native `AudrenSDK` backed by `crates/audren-ffi` (~50 ms native local ZK proving).
+// using native `AudrenSDK` backed by `crates/audren-ffi` (~50 ms native local ZK proving),
+// producing 100% byte-for-byte identical stdout across all 4 official SDKs.
 //
 // Run (with sibling `../audren` built via `./scripts/build-mobile-sdks.sh bindings`):
 //   cd swift/quickstart && swift run
@@ -23,6 +24,10 @@ private func hexToData(_ hex: String) -> Data {
 private func dataToHex(_ data: Data) -> String {
     data.map { String(format: "%02x", $0) }.joined()
 }
+
+let usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+let wsolMint = "So11111111111111111111111111111111111111112"
+let classicTokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 let envRepo = ProcessInfo.processInfo.environment["AUDREN_REPO_DIR"]
 let repoRoot = envRepo.map { URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: #filePath)
@@ -75,7 +80,7 @@ print("  EpochPage #0  : \(page0Pda.address) (count=\(hdr.count)/32)")
 print("  SOL Vault     : \(solVaultPda.address)")
 print("  Escrow #0     : \(escrow0Pda.address)")
 
-// 3. SCANNER — 1,056-byte dataSlice[64..1120] view-tag filter & note decryption
+// 3. SCANNER — 1,056-byte dataSlice[64..1120] view-tag filter, read-only FVK & spendable decrypt
 let sliceCfg = pageScanDataSlice()
 let hits = try scanPageDataslice(
     pageId: 0,
@@ -84,6 +89,17 @@ let hits = try scanPageDataslice(
     viewSk32: alice.viewSk
 )
 precondition(Array(hits) == [5])
+
+let watchOnlyNotes = try scanEpochPage(
+    poolId: 0,
+    pageBytes: pageBytes,
+    spendSk32: nil,
+    spendPk32: alice.spendPk,
+    viewSk32: alice.viewSk,
+    programId: pid
+)
+precondition(watchOnlyNotes.count == 1 && watchOnlyNotes[0].nullifierPda == nil)
+
 let notes = try scanEpochPage(
     poolId: 0,
     pageBytes: pageBytes,
@@ -96,9 +112,10 @@ let note = notes[0]
 
 print("[3/6 SCANNER]")
 print("  dataSlice     : offset=\(sliceCfg.offset), length=\(sliceCfg.length) B -> matched slot \(hits[0])")
-print("  Owned note    : \(note.amount) lamports | NullifierPDA=\(note.nullifierPda ?? "")")
+print("  Read-only FVK : \(watchOnlyNotes[0].amount) lamports | NullifierPDA=none")
+print("  Spendable note: \(note.amount) lamports | NullifierPDA=\(note.nullifierPda ?? "")")
 
-// 4. PROVER — Native ~50 ms Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer & Withdraw
+// 4. PROVER — Native ~50 ms Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
 let payer = pdasJson["proof_buffer_authority"] as! String
 let bobAddr = bobJson["address"] as! String
 
@@ -110,7 +127,7 @@ let depIx = try buildDepositInstruction(params: FfiDepositParams(
     recipientAddress: bobAddr,
     mint32: Data(repeating: 0, count: 32),
     grossAmount: 500_000,
-    netAmount: 500_000,
+    netAmount: netDepositAmount(grossAmount: 500_000, feeBps: 0, maxFee: 0),
     tokenProgram: nil,
     depositorAta: nil,
     vaultAta: nil
@@ -130,6 +147,7 @@ let xferIx = try buildTransferInstruction(params: FfiTransferParams(
     auditorPk32: nil
 ))
 let bufPlan = try buildBufferedExecutionPlan(nonce: 42, inner: xferIx)
+let closeBufIx = try buildCloseProofBufferInstruction(programId: pid, payer: payer, nonce: 42)
 let wdIx = try buildWithdrawInstruction(params: FfiWithdrawParams(
     programId: pid,
     payer: payer,
@@ -146,16 +164,34 @@ let wdIx = try buildWithdrawInstruction(params: FfiWithdrawParams(
     auditorPk32: nil
 ))
 
+precondition(depIx.data.count == 139)
+precondition(xferIx.data.count == 2373)
+precondition(closeBufIx.data.count == 1)
+precondition(wdIx.data.count == 1966)
+
 print("[4/6 PROVER]")
 print("  Deposit ix    : \(depIx.data.count) B (tag=\(depIx.data[0]))")
-print("  Transfer m=5  : \(xferIx.data.count) B (tag=\(xferIx.data[0]), ProofBuffer chunks=\(bufPlan.uploadChunks.count))")
+print("  Transfer m=5  : \(xferIx.data.count) B (tag=\(xferIx.data[0]), ProofBuffer chunks=\(bufPlan.uploadChunks.count), CloseProofBuffer=\(closeBufIx.data.count) B)")
 print("  Withdraw ix   : \(wdIx.data.count) B (tag=\(wdIx.data[0]))")
 
 // 5. DISCLOSURE & AUDIT — Mode 1 Selective Disclosure + Institutional Auditor ElGamal decrypt
 let sd = createSelectiveDisclosureProof(note: note)
 let sdValid = try verifySelectiveDisclosureProof(proof: sd)
 let sdOnPage = try verifySelectiveDisclosureOnPage(proof: sd, pageBytes: pageBytes)
-precondition(sdValid && sdOnPage)
+let tamperedSd = FfiSelectiveDisclosureProof(
+    version: sd.version,
+    pageId: sd.pageId,
+    slotIndex: sd.slotIndex,
+    stealthPkB58: sd.stealthPkB58,
+    assetTagB58: sd.assetTagB58,
+    commitmentB58: sd.commitmentB58,
+    mintB58: sd.mintB58,
+    amount: sd.amount + 1,
+    assetBlindingB58: sd.assetBlindingB58,
+    valueBlindingB58: sd.valueBlindingB58
+)
+let tamperedValid = try verifySelectiveDisclosureOnPage(proof: tamperedSd, pageBytes: pageBytes)
+precondition(sdValid && sdOnPage && !tamperedValid)
 
 let aud = try deriveAuditorKeypair(seed32: hexToData(audJson["auditor_seed_hex"] as! String))
 let dec = try auditorDecryptNote(
@@ -169,10 +205,39 @@ precondition(dataToHex(dec.spentStealthPk) == (audJson["expected_spent_pk_hex"] 
 precondition(dataToHex(dec.assetGenerator) == (audJson["expected_asset_gen_hex"] as! String))
 
 print("[5/6 DISCLOSURE & AUDIT]")
-print("  Mode 1 proof  : verified standalone & on-page")
+print("  Mode 1 proof  : verified standalone & on-page (tampered rejected)")
 print("  Auditor decrypt: spent stealth_pk & asset_generator verified")
 
-// 6. RELAYER & ROUTER
+// 6. RELAYER & ROUTER — Unified cross-SDK prepareRouterAccounts & defaultRelayUrl
+let escrowInAta = try deriveAssociatedTokenAddress(
+    ownerB58: escrow0Pda.address,
+    mintB58: usdcMint,
+    tokenProgramB58: classicTokenProgram
+)
+let escrowOutAta = try deriveAssociatedTokenAddress(
+    ownerB58: escrow0Pda.address,
+    mintB58: wsolMint,
+    tokenProgramB58: classicTokenProgram
+)
+let prepared = try prepareRouterAccounts(
+    poolId: 0,
+    shardId: 0,
+    inputMintB58: usdcMint,
+    outputMintB58: wsolMint,
+    inputTokenProgramB58: classicTokenProgram,
+    outputTokenProgramB58: classicTokenProgram,
+    routerAccounts: [
+        FfiAccountMeta(pubkey: escrowInAta, isSigner: false, isWritable: true),
+        FfiAccountMeta(pubkey: escrowOutAta, isSigner: false, isWritable: true),
+        FfiAccountMeta(pubkey: escrow0Pda.address, isSigner: true, isWritable: false),
+    ],
+    programId: pid
+)
+let outerSigners = prepared.accounts.filter { $0.isSigner }.count
+precondition(prepared.escrowIdx == 2 && prepared.escrowInIdx == 0 && prepared.escrowOutIdx == 1)
+precondition(outerSigners == 0)
+
 print("[6/6 RELAYER & ROUTER]")
 print("  Default relay : \(defaultRelayUrl())")
+print("  Router escrow : idx=\(prepared.escrowIdx), in=\(prepared.escrowInIdx), out=\(prepared.escrowOutIdx) (outer signers=\(outerSigners))")
 print("  Excluded DEXes: \(jupiterCpiExcludedDexes().joined(separator: ","))")

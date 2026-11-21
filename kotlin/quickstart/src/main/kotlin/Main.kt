@@ -6,7 +6,8 @@ import java.io.File
  * Audren Canonical 6-Building-Block Quickstart (Kotlin SDK — Android API 24+ / JVM 21+).
  *
  * Executes the exact same 6 building blocks mirrored across Rust, TypeScript, Swift, and Kotlin
- * using native `xyz.audren.sdk` backed by `crates/audren-ffi` (~50 ms native local ZK proving).
+ * using native `xyz.audren.sdk` backed by `crates/audren-ffi` (~50 ms native local ZK proving),
+ * producing 100% byte-for-byte identical stdout across all 4 official SDKs.
  *
  * Run (with sibling `../audren` built via `./scripts/build-mobile-sdks.sh bindings`):
  *   cd kotlin/quickstart && gradle run
@@ -16,6 +17,10 @@ private fun hexToBytes(hex: String): ByteArray =
 
 private fun bytesToHex(bytes: ByteArray): String =
     bytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+private const val USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+private const val WSOL_MINT = "So11111111111111111111111111111111111111112"
+private const val CLASSIC_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 fun main() {
     val audrenRepo = System.getenv("AUDREN_REPO_DIR")
@@ -59,7 +64,7 @@ fun main() {
     println("  SOL Vault     : ${solVaultPda.address}")
     println("  Escrow #0     : ${escrow0Pda.address}")
 
-    // 3. SCANNER — 1,056-byte dataSlice[64..1120] view-tag filter & note decryption
+    // 3. SCANNER — 1,056-byte dataSlice[64..1120] view-tag filter, read-only FVK & spendable decrypt
     val sliceCfg = pageScanDataSlice()
     val hits = scanPageDataslice(
         0uL,
@@ -68,13 +73,17 @@ fun main() {
         alice.viewSk,
     )
     check(hits.size == 1 && hits[0].toInt() == 5)
+
+    val watchOnly = scanEpochPage(0u, pageBytes, null, alice.spendPk, alice.viewSk, pid).first()
+    check(watchOnly.nullifierPda == null)
     val note = scanEpochPage(0u, pageBytes, alice.spendSk, alice.spendPk, alice.viewSk, pid).first()
 
     println("[3/6 SCANNER]")
     println("  dataSlice     : offset=${sliceCfg.offset}, length=${sliceCfg.length} B -> matched slot ${hits[0]}")
-    println("  Owned note    : ${note.amount} lamports | NullifierPDA=${note.nullifierPda}")
+    println("  Read-only FVK : ${watchOnly.amount} lamports | NullifierPDA=none")
+    println("  Spendable note: ${note.amount} lamports | NullifierPDA=${note.nullifierPda}")
 
-    // 4. PROVER — Native ~50 ms Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer & Withdraw
+    // 4. PROVER — Native ~50 ms Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
     val payer = pdasJson.getString("proof_buffer_authority")
     val bobAddr = bobJson.getString("address")
 
@@ -87,7 +96,7 @@ fun main() {
             recipientAddress = bobAddr,
             mint32 = ByteArray(32),
             grossAmount = 500_000uL,
-            netAmount = 500_000uL,
+            netAmount = netDepositAmount(500_000uL, 0u, 0uL),
             tokenProgram = null,
             depositorAta = null,
             vaultAta = null,
@@ -110,6 +119,7 @@ fun main() {
         ),
     )
     val bufPlan = buildBufferedExecutionPlan(42uL, xferIx)
+    val closeBufIx = buildCloseProofBufferInstruction(pid, payer, 42uL)
     val wdIx = buildWithdrawInstruction(
         FfiWithdrawParams(
             programId = pid,
@@ -128,9 +138,14 @@ fun main() {
         ),
     )
 
+    check(depIx.data.size == 139)
+    check(xferIx.data.size == 2373)
+    check(closeBufIx.data.size == 1)
+    check(wdIx.data.size == 1966)
+
     println("[4/6 PROVER]")
     println("  Deposit ix    : ${depIx.data.size} B (tag=${depIx.data[0]})")
-    println("  Transfer m=5  : ${xferIx.data.size} B (tag=${xferIx.data[0]}, ProofBuffer chunks=${bufPlan.uploadChunks.size})")
+    println("  Transfer m=5  : ${xferIx.data.size} B (tag=${xferIx.data[0]}, ProofBuffer chunks=${bufPlan.uploadChunks.size}, CloseProofBuffer=${closeBufIx.data.size} B)")
     println("  Withdraw ix   : ${wdIx.data.size} B (tag=${wdIx.data[0]})")
 
     // 5. DISCLOSURE & AUDIT — Mode 1 Selective Disclosure + Institutional Auditor ElGamal decrypt
@@ -154,8 +169,29 @@ fun main() {
     println("  Mode 1 proof  : verified standalone & on-page (tampered rejected)")
     println("  Auditor decrypt: spent stealth_pk & asset_generator verified")
 
-    // 6. RELAYER & ROUTER
+    // 6. RELAYER & ROUTER — Unified cross-SDK prepareRouterAccounts & defaultRelayUrl
+    val escrowInAta = deriveAssociatedTokenAddress(escrow0Pda.address, USDC_MINT, CLASSIC_TOKEN_PROGRAM)
+    val escrowOutAta = deriveAssociatedTokenAddress(escrow0Pda.address, WSOL_MINT, CLASSIC_TOKEN_PROGRAM)
+    val prepared = prepareRouterAccounts(
+        0u,
+        0u,
+        USDC_MINT,
+        WSOL_MINT,
+        CLASSIC_TOKEN_PROGRAM,
+        CLASSIC_TOKEN_PROGRAM,
+        listOf(
+            FfiAccountMeta(escrowInAta, false, true),
+            FfiAccountMeta(escrowOutAta, false, true),
+            FfiAccountMeta(escrow0Pda.address, true, false),
+        ),
+        pid,
+    )
+    val outerSigners = prepared.accounts.count { it.isSigner }
+    check(prepared.escrowIdx == 2.toUByte() && prepared.escrowInIdx == 0.toUByte() && prepared.escrowOutIdx == 1.toUByte())
+    check(outerSigners == 0)
+
     println("[6/6 RELAYER & ROUTER]")
     println("  Default relay : ${defaultRelayUrl()}")
+    println("  Router escrow : idx=${prepared.escrowIdx}, in=${prepared.escrowInIdx}, out=${prepared.escrowOutIdx} (outer signers=$outerSigners)")
     println("  Excluded DEXes: ${jupiterCpiExcludedDexes().joinToString(",")}")
 }

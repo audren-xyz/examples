@@ -1,11 +1,14 @@
 //! Audren Example 2 — Institutional Auditability (`PoolMode::InstitutionalAudited`) & Selective Disclosure.
 //!
-//! Runs completely offline (zero RPC required) to demonstrate:
+//! Runs completely offline (zero RPC required) using ONLY official `audren-client` SDK helpers
+//! (zero hand-sliced instruction bytes, zero manual ring construction, zero manual receipt encoding):
 //! 1. Generating a verifiable `InstitutionalAudited` transfer proof containing ElGamal
 //!    ciphertexts `(S_1, S_2)` (encrypting spent note `P_l`) and `(M_1, M_2)` (encrypting `G_mint`)
 //!    bound mathematically inside the on-chain Triptych + DLEQ verification equations
-//! 2. Decrypting the exact spent note pubkey `P_l` and exact hidden mint `G_mint` using `AuditorKeypair`
+//! 2. Extracting `(S_1, S_2, M_1, M_2)` via `extract_transfer_auditor_ciphertexts` and decrypting
+//!    the exact spent note pubkey `P_l` and exact hidden mint `G_mint` using `AuditorKeypair`
 //! 3. Generating and independently verifying a Mode 1 per-transaction `SelectiveDisclosureProof`
+//!    (both standalone and anchored on-page, plus verifying tampered receipts are rejected)
 //!    without revealing the user's spending key or viewing key for any other transaction
 //!
 //! Run:
@@ -14,15 +17,15 @@
 //! ```
 
 use audren_client::{
-    instructions::build_transfer,
+    instructions::{build_transfer, extract_transfer_auditor_ciphertexts},
     keys::{prepare_shielded_note, AudrenKeys, AuditorKeypair, SelectiveDisclosureProof},
-    prover::{asset_generator, RingSlotWitness, IDENTITY},
+    prover::{asset_generator, extract_ring_from_page},
     scanner::{decrypt_owned_note, OwnedNote},
 };
 use audren_core::{
-    instruction::{triptych_proof_len, AUDITOR_ASSET_PROOF_LEN, NOTE_WIRE_LEN},
-    layout::{write_page_note, PageHeader, PAGE_CAPACITY, PAGE_LEN},
-    AUDREN_PROGRAM_ID, NATIVE_SOL_MINT,
+    instruction::triptych_proof_len,
+    layout::{write_page_note, PageHeader, PAGE_LEN},
+    AUDREN_PROGRAM_ID, NATIVE_SOL_MINT, PROTOCOL_VERSION,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use solana_address::Address;
@@ -55,8 +58,8 @@ fn main() {
     .unwrap();
 
     let mut page_bytes = vec![0u8; PAGE_LEN];
-    let hdr = PageHeader {
-        version: 1,
+    PageHeader {
+        version: PROTOCOL_VERSION,
         bump: 255,
         closed: false,
         count: 1,
@@ -64,11 +67,12 @@ fn main() {
         page_id: 0,
         created_slot: 1,
         closed_slot: 0,
-    };
-    hdr.encode(&mut page_bytes).unwrap();
+    }
+    .encode(&mut page_bytes)
+    .unwrap();
     write_page_note(&mut page_bytes, 0, &prepared.entry).unwrap();
 
-    // Recover Alice's OwnedNote via standard decryption
+    // Recover Alice's OwnedNote via standard SDK decryption
     let alice_note: OwnedNote = decrypt_owned_note(
         &alice.full_viewing_key(),
         Some(&alice),
@@ -82,20 +86,7 @@ fn main() {
     .expect("decrypt Alice USDC note");
 
     // 3. Build an InstitutionalAudited Transfer (100 USDC -> Bob, 150 USDC change -> Alice)
-    let mut ring = Vec::with_capacity(PAGE_CAPACITY);
-    ring.push(RingSlotWitness {
-        stealth_pk: prepared.entry.stealth_pk,
-        asset_tag: prepared.entry.asset_tag,
-        commitment: prepared.entry.commitment,
-    });
-    for _ in 1..PAGE_CAPACITY {
-        ring.push(RingSlotWitness {
-            stealth_pk: IDENTITY,
-            asset_tag: IDENTITY,
-            commitment: IDENTITY,
-        });
-    }
-
+    let ring = extract_ring_from_page(&page_bytes).unwrap();
     let (xfer_ix, note_pay, _note_chg) = build_transfer(
         program_id,
         payer,
@@ -114,24 +105,11 @@ fn main() {
     )
     .unwrap();
 
-    // 4. Parse `(S_1, S_2)` from the Triptych audited extension and `(M_1, M_2)` from the auditor asset proof
-    // Wire layout of Transfer (`xfer_ix.data`):
-    // tag(1) | m(1) | pay_note(193) | chg_note(193) | c_pay(32) | c_chg(32) |
-    // triptych(1345) | cross_base_2(256) | range_u128(736) | pq_len(2) | pq_env(0) | auditor_asset(192)
-    let triptych_off = 2 + 2 * NOTE_WIRE_LEN + 64;
+    // 4. Extract `(S_1, S_2, M_1, M_2)` via official SDK parser and decrypt with `AuditorKeypair`
+    let (s1, s2, m1, m2) = extract_transfer_auditor_ciphertexts(&xfer_ix.data)
+        .expect("extract audited transfer ciphertexts");
     let base_triptych_len = triptych_proof_len(5, false).unwrap();
     let full_triptych_len = triptych_proof_len(5, true).unwrap();
-    let s1: [u8; 32] = xfer_ix.data[triptych_off + base_triptych_len..triptych_off + base_triptych_len + 32]
-        .try_into()
-        .unwrap();
-    let s2: [u8; 32] =
-        xfer_ix.data[triptych_off + base_triptych_len + 32..triptych_off + base_triptych_len + 64]
-            .try_into()
-            .unwrap();
-
-    let auditor_asset_off = xfer_ix.data.len() - AUDITOR_ASSET_PROOF_LEN;
-    let m1: [u8; 32] = xfer_ix.data[auditor_asset_off..auditor_asset_off + 32].try_into().unwrap();
-    let m2: [u8; 32] = xfer_ix.data[auditor_asset_off + 32..auditor_asset_off + 64].try_into().unwrap();
 
     let decrypted_pk = auditor.decrypt_spent_pubkey(&s1, &s2).unwrap();
     let decrypted_mint_gen = auditor.decrypt_asset_generator(&m1, &m2).unwrap();
@@ -140,24 +118,34 @@ fn main() {
     assert_ne!(decrypted_mint_gen, asset_generator(&NATIVE_SOL_MINT));
 
     println!("[AUDITOR DECRYPTION VERIFIED]");
-    println!("  Audited Triptych size : {} B (base {} B + 416 B ElGamal extension)", full_triptych_len, base_triptych_len);
+    println!(
+        "  Audited Triptych size : {} B (base {} B + {} B ElGamal extension)",
+        full_triptych_len,
+        base_triptych_len,
+        full_triptych_len - base_triptych_len
+    );
     println!("  Recovered spent P_l   : matches Alice's slot-0 stealth pubkey 100%");
     println!("  Recovered hidden mint : matches USDC generator G_USDC (not SOL)");
 
     // 5. Mode 1 Selective Disclosure Proof (Alice proves Bob received 100 USDC without exposing any other tx!)
-    let disclosure = SelectiveDisclosureProof {
-        version: 1,
-        page_id: 0,
-        slot_index: 1,
-        stealth_pk_b58: Address::new_from_array(note_pay.entry.stealth_pk).to_string(),
-        asset_tag_b58: Address::new_from_array(note_pay.entry.asset_tag).to_string(),
-        commitment_b58: Address::new_from_array(note_pay.entry.commitment).to_string(),
-        mint_b58: Address::new_from_array(usdc_mint).to_string(),
-        amount: 100_000_000,
-        asset_blinding_b58: Address::new_from_array(note_pay.asset_blinding.to_bytes()).to_string(),
-        value_blinding_b58: Address::new_from_array(note_pay.value_blinding.to_bytes()).to_string(),
-    };
-    assert!(disclosure.verify().unwrap(), "selective disclosure must verify");
+    write_page_note(&mut page_bytes, 1, &note_pay.entry).unwrap();
+    let mut disclosure = SelectiveDisclosureProof::from_prepared_note(0, 1, &note_pay);
+    assert!(disclosure.verify().unwrap(), "standalone selective disclosure must verify");
+    assert!(
+        disclosure.verify_against_page(&page_bytes).unwrap(),
+        "on-page selective disclosure must verify"
+    );
+
+    // Tampered amount must be rejected
+    disclosure.amount += 1;
+    assert!(
+        !disclosure.verify_against_page(&page_bytes).unwrap(),
+        "tampered selective disclosure must be rejected"
+    );
+
     println!("[SELECTIVE DISCLOSURE VERIFIED]");
-    println!("  Third-party verified 100.00 USDC payment to stealth note {} with ZERO key exposure!", disclosure.stealth_pk_b58);
+    println!(
+        "  Third-party verified 100.00 USDC payment to stealth note {} (standalone + on-page, tampered rejected) with ZERO key exposure!",
+        disclosure.stealth_pk_b58
+    );
 }

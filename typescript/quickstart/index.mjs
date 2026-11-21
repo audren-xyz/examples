@@ -3,7 +3,8 @@
  *
  * Runs completely offline (zero RPC required) and executes the exact same 6 building blocks
  * mirrored across Rust, TypeScript, Swift (iOS), and Kotlin (Android) against the shared
- * canonical `spec/test-vectors.json` conformance page.
+ * canonical `spec/test-vectors.json` conformance page — producing 100% byte-for-byte identical
+ * stdout across all 4 official SDKs.
  *
  * Run (from `typescript/`):
  *   pnpm install && pnpm quickstart
@@ -16,23 +17,27 @@ import { resolve } from 'node:path';
 import {
   AUDREN_DEFAULT_RELAY_URL,
   AUDREN_PROGRAM_ID,
+  CLASSIC_TOKEN_PROGRAM_ID,
   JUPITER_CPI_EXCLUDED_DEXES,
   PAGE_CAPACITY,
-  PAGE_SCAN_LEN,
-  PAGE_SCAN_OFFSET,
+  PAGE_SCAN_DATA_SLICE,
+  WSOL_MINT,
   base58Decode,
   decodePageHeader,
   decodePoolState,
+  deriveAssociatedTokenAddress,
   deriveEpochPagePda,
   derivePoolPda,
   deriveSolVaultPda,
   deriveSwapEscrowPda,
   parseAudrenAddress,
+  prepareRouterAccounts,
 } from '@audren/sdk';
 import {
   NATIVE_SOL_MINT,
   auditorDecryptNote,
   buildBufferedExecutionPlan,
+  buildCloseProofBufferInstruction,
   buildDepositInstruction,
   buildTransferInstruction,
   buildWithdrawInstruction,
@@ -43,7 +48,7 @@ import {
   exportFullViewingKey,
   extractRingFromPage,
   fromHex,
-  parseAudrenAddress as parseProverAddress,
+  scanEpochPage,
   scanEpochPageSpendable,
   scanPageScanSlice,
   toHex,
@@ -51,6 +56,7 @@ import {
   verifySelectiveDisclosureReceipt,
 } from '@audren/sdk/prover';
 
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const audrenRepo = process.env.AUDREN_REPO_DIR ?? resolve(import.meta.dirname, '../../../audren');
 const vectors = JSON.parse(readFileSync(resolve(audrenRepo, 'spec/test-vectors.json'), 'utf8'));
 
@@ -83,20 +89,23 @@ console.log(`  EpochPage #0  : ${page0Pda.address} (count=${hdr.count}/${PAGE_CA
 console.log(`  SOL Vault     : ${solVaultPda.address}`);
 console.log(`  Escrow #0     : ${escrow0Pda.address}`);
 
-// 3. SCANNER — 1,056-byte dataSlice[64..1120] view-tag filter & note decryption
+// 3. SCANNER — 1,056-byte dataSlice[64..1120] view-tag filter, read-only FVK & spendable decrypt
 const slice = fromHex(vectors.epoch_page.scan_slice_hex);
-const hits = await scanPageScanSlice(alice, slice);
+const hits = await scanPageScanSlice(aliceFvk, slice);
 assert.deepEqual(hits, [5]);
+
+const [watchOnly] = await scanEpochPage(aliceFvk, pageBytes, 0);
+assert.equal(watchOnly.nullifierPdaB58, undefined);
 const [note] = await scanEpochPageSpendable(alice, pageBytes, 0);
 
 console.log('[3/6 SCANNER]');
-console.log(`  dataSlice     : offset=${PAGE_SCAN_OFFSET}, length=${PAGE_SCAN_LEN} B -> matched slot ${hits[0]}`);
-console.log(`  Owned note    : ${note.amount} lamports | NullifierPDA=${note.nullifierPdaB58}`);
+console.log(`  dataSlice     : offset=${PAGE_SCAN_DATA_SLICE.offset}, length=${PAGE_SCAN_DATA_SLICE.length} B -> matched slot ${hits[0]}`);
+console.log(`  Read-only FVK : ${watchOnly.amount} lamports | NullifierPDA=none`);
+console.log(`  Spendable note: ${note.amount} lamports | NullifierPDA=${note.nullifierPdaB58}`);
 
-// 4. PROVER — Pure-TS Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer & Withdraw
+// 4. PROVER — Pure-TS Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
 const payer = base58Decode(vectors.pdas.proof_buffer_authority);
-const bobAddr = parseProverAddress(vectors.bob.address);
-const aliceAddr = parseProverAddress(alice.address);
+const bobAddr = vectors.bob.address;
 const ring = extractRingFromPage(pageBytes);
 
 const { instructions: [depIx] } = await buildDepositInstruction({
@@ -116,10 +125,11 @@ const { instruction: xferIx } = await buildTransferInstruction({
   inputNote: note,
   secretIndex: note.slotIndex,
   recipient: bobAddr,
-  changeAddr: aliceAddr,
+  changeAddr: alice.address,
   payAmount: 900_000n,
 });
 const bufPlan = await buildBufferedExecutionPlan(xferIx, 42n);
+const closeBufIx = await buildCloseProofBufferInstruction({ payer, nonce: 42n });
 const { instruction: wdIx } = await buildWithdrawInstruction({
   payer,
   poolId: 0,
@@ -129,20 +139,25 @@ const { instruction: wdIx } = await buildWithdrawInstruction({
   inputNote: note,
   secretIndex: note.slotIndex,
   recipientAccount: payer,
-  changeAddr: aliceAddr,
+  changeAddr: alice.address,
   amount: 1_000_000n,
 });
 
+assert.equal(depIx.data.length, 139);
+assert.equal(xferIx.data.length, 2373);
+assert.equal(closeBufIx.data.length, 1);
+assert.equal(wdIx.data.length, 1966);
+
 console.log('[4/6 PROVER]');
 console.log(`  Deposit ix    : ${depIx.data.length} B (tag=${depIx.data[0]})`);
-console.log(`  Transfer m=5  : ${xferIx.data.length} B (tag=${xferIx.data[0]}, ProofBuffer chunks=${bufPlan.uploadChunks.length})`);
+console.log(`  Transfer m=5  : ${xferIx.data.length} B (tag=${xferIx.data[0]}, ProofBuffer chunks=${bufPlan.uploadChunks.length}, CloseProofBuffer=${closeBufIx.data.length} B)`);
 console.log(`  Withdraw ix   : ${wdIx.data.length} B (tag=${wdIx.data[0]})`);
 
 // 5. DISCLOSURE & AUDIT — Mode 1 Selective Disclosure + Institutional Auditor ElGamal decrypt
 const sd = createSelectiveDisclosureProof(note);
 assert.equal((await verifySelectiveDisclosureReceipt(sd)).valid, true);
 assert.equal((await verifySelectiveDisclosureOnPage(sd, pageBytes)).valid, true);
-assert.equal((await verifySelectiveDisclosureOnPage({ ...sd, amount: sd.amount + 1 }, pageBytes)).valid, false);
+assert.equal((await verifySelectiveDisclosureOnPage({ ...sd, amount: BigInt(sd.amount) + 1n }, pageBytes)).valid, false);
 
 const auditor = await deriveAuditorKeypair(fromHex(vectors.auditor.auditor_seed_hex));
 const decrypted = auditorDecryptNote({
@@ -159,7 +174,33 @@ console.log('[5/6 DISCLOSURE & AUDIT]');
 console.log('  Mode 1 proof  : verified standalone & on-page (tampered rejected)');
 console.log('  Auditor decrypt: spent stealth_pk & asset_generator verified');
 
-// 6. RELAYER & ROUTER
+// 6. RELAYER & ROUTER — Unified cross-SDK prepareRouterAccounts & AUDREN_DEFAULT_RELAY_URL
+const { address: escrowInAta } = await deriveAssociatedTokenAddress(
+  escrow0Pda.address,
+  USDC_MINT,
+  CLASSIC_TOKEN_PROGRAM_ID,
+);
+const { address: escrowOutAta } = await deriveAssociatedTokenAddress(
+  escrow0Pda.address,
+  WSOL_MINT,
+  CLASSIC_TOKEN_PROGRAM_ID,
+);
+const prepared = await prepareRouterAccounts({
+  poolId: 0,
+  shardId: 0,
+  inputMint: USDC_MINT,
+  outputMint: WSOL_MINT,
+  routerAccounts: [
+    { pubkey: escrowInAta, isSigner: false, isWritable: true },
+    { pubkey: escrowOutAta, isSigner: false, isWritable: true },
+    { pubkey: escrow0Pda.address, isSigner: true, isWritable: false },
+  ],
+});
+const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
+assert.deepEqual([prepared.escrowIdx, prepared.escrowInIdx, prepared.escrowOutIdx], [2, 0, 1]);
+assert.equal(outerSigners, 0);
+
 console.log('[6/6 RELAYER & ROUTER]');
 console.log(`  Default relay : ${AUDREN_DEFAULT_RELAY_URL}`);
+console.log(`  Router escrow : idx=${prepared.escrowIdx}, in=${prepared.escrowInIdx}, out=${prepared.escrowOutIdx} (outer signers=${outerSigners})`);
 console.log(`  Excluded DEXes: ${JUPITER_CPI_EXCLUDED_DEXES.join(',')}`);

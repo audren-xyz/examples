@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-and-kotlin:
-    name: Rust & Kotlin Examples
+  rust-ts-kotlin-parity:
+    name: Rust, TypeScript & Kotlin Examples (+ Cross-SDK Parity)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -31,10 +31,28 @@ jobs:
             examples/rust -> target
             audren -> target
       - name: Check & run Rust examples (quickstart & institutional-audit)
+        env:
+          AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
           cargo check --manifest-path examples/rust/Cargo.toml --all-targets
-          cargo run --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart
-          cargo run --manifest-path examples/rust/Cargo.toml -p audren-example-institutional-audit
+          cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
+          cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-institutional-audit
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Build @audren/sdk and run TypeScript examples
+        env:
+          AUDREN_REPO_DIR: ${{ github.workspace }}/audren
+        run: |
+          pnpm --dir audren/packages/sdk install --frozen-lockfile
+          pnpm --dir audren/packages/sdk build
+          pnpm --dir examples/typescript install
+          pnpm --dir examples/typescript --silent quickstart | tee /tmp/out-ts.txt
+          pnpm --dir examples/typescript swap-plan
+          node --check examples/typescript/dataslice-scanner/index.mjs
       - name: Build native libaudren_ffi.so for Kotlin quickstart
         working-directory: audren
         run: cargo build -p audren-ffi --release
@@ -49,36 +67,15 @@ jobs:
         working-directory: examples/kotlin/quickstart
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
-        run: gradle run --no-daemon
-
-  typescript:
-    name: TypeScript Examples (@audren/sdk)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          path: examples
-      - uses: actions/checkout@v7
-        with:
-          repository: audren-xyz/audren
-          path: audren
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-      - name: Build @audren/sdk and run TypeScript examples
+        run: gradle -q run --no-daemon | tee /tmp/out-kotlin.txt
+      - name: Enforce byte-for-byte canonical parity across Rust, TypeScript & Kotlin
         run: |
-          pnpm --dir audren/packages/sdk install --frozen-lockfile
-          pnpm --dir audren/packages/sdk build
-          pnpm --dir examples/typescript install
-          pnpm --dir examples/typescript quickstart
-          pnpm --dir examples/typescript swap-plan
-          node --check examples/typescript/dataslice-scanner/index.mjs
+          diff -u /tmp/out-rust.txt /tmp/out-ts.txt
+          diff -u /tmp/out-rust.txt /tmp/out-kotlin.txt
+          echo "100% byte-for-byte canonical stdout parity verified: Rust == TypeScript == Kotlin"
 
-  swift:
-    name: Swift (iOS/macOS) Example
+  swift-parity:
+    name: Swift (iOS/macOS) Example (+ Rust Parity)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -93,10 +90,16 @@ jobs:
           toolchain: '1.97.1'
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: audren -> target
-      - name: Build native libaudren_ffi.dylib and run Swift quickstart
+          workspaces: |
+            examples/rust -> target
+            audren -> target
+      - name: Build native libaudren_ffi.dylib and verify Swift == Rust parity
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
           (cd audren && cargo build -p audren-ffi --release)
-          (cd examples/swift/quickstart && swift run)
+          cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
+          (cd examples/swift/quickstart && swift run -q 2>/dev/null || swift run) > /tmp/out-swift-raw.txt
+          sed -n '/^\[1\/6 KEYS\]/,$p' /tmp/out-swift-raw.txt | tee /tmp/out-swift.txt
+          diff -u /tmp/out-rust.txt /tmp/out-swift.txt
+          echo "100% byte-for-byte canonical stdout parity verified: Rust == Swift"

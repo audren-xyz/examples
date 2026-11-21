@@ -1,11 +1,11 @@
 [package]
 name = "audren-example-institutional-audit"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "fa467ccea98f580d7d9a442f135ee42ee942bd42" }
-audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "fa467ccea98f580d7d9a442f135ee42ee942bd42" }
+audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "ddd814728d333bea2815ebd0bf228e9655d9c60d" }
+audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "ddd814728d333bea2815ebd0bf228e9655d9c60d" }
 rand = "0.8.5"
 solana-address = { version = "~2.7.0", features = ["curve25519"] }

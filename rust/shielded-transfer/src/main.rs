@@ -2,6 +2,7 @@
 //!
 //! Demonstrates:
 //! 1. Reading `PoolState` (`192 B`) for Pool #0 (`5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`)
+//!    and rolling over the active `EpochPage` via `build_open_page` if nearly full or closed
 //! 2. Shielding `0.005 SOL` into a stealth-owned note (depositor, amount and output location are public) (`Tag 2: Deposit`) via Solana v1 tx (`0x81`)
 //! 3. Standard Solana RPC `getAccountInfo` `dataSlice[64..1120]` note discovery
 //! 4. Building & settling a Multi-Base Triptych (`m = 5`, 32-note ring) + Agave Bulletproof `Transfer`
@@ -18,7 +19,8 @@
 
 use audren_client::{
     instructions::{
-        build_buffered_execution, build_deposit, build_transfer, build_withdraw, AudrenInstruction,
+        build_buffered_execution, build_deposit, build_open_page, build_transfer, build_withdraw,
+        AudrenInstruction,
     },
     keys::AudrenKeys,
     pda::{derive_epoch_page_pda, derive_pool_pda},
@@ -26,7 +28,7 @@ use audren_client::{
     scanner::{decrypt_owned_note, scan_page_dataslice},
 };
 use audren_core::{
-    layout::{PoolState, PAGE_SCAN_LEN, PAGE_SCAN_OFFSET},
+    layout::{PageHeader, PoolState, PAGE_CAPACITY, PAGE_SCAN_LEN, PAGE_SCAN_OFFSET},
     AUDREN_PROGRAM_ID, NATIVE_SOL_MINT,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -209,9 +211,39 @@ fn send_audren_v1(
     send_v1_and_confirm(url, payer, &[to_ix(&plan.execute)], cu_limit, &format!("ExecBuffered({label})"))
 }
 
+/// Ensure the active EpochPage has at least `min_free_slots` open slots; roll over via
+/// `build_open_page` if the active page is closed or nearly full.
+fn ensure_active_page_capacity(
+    url: &str,
+    payer: &Keypair,
+    program_id: Address,
+    pool_id: u32,
+    current_page_id: u64,
+    min_free_slots: usize,
+) -> u64 {
+    let (cur_pda, _) = derive_epoch_page_pda(&program_id, pool_id, current_page_id);
+    if let Some(raw) = get_account(url, &cur_pda, None) {
+        let hdr = PageHeader::decode(&raw).expect("decode active PageHeader");
+        let free = PAGE_CAPACITY.saturating_sub(usize::from(hdr.count));
+        if hdr.closed || free < min_free_slots {
+            let open_ix = build_open_page(program_id, payer.pubkey(), pool_id, current_page_id);
+            send_v1_and_confirm(
+                url,
+                payer,
+                &[to_ix(&open_ix)],
+                120_000,
+                &format!("OpenPage({} -> {})", current_page_id, current_page_id + 1),
+            );
+            return current_page_id + 1;
+        }
+    }
+    current_page_id
+}
+
 fn main() {
     let rpc_url = std::env::var("AUDREN_RPC_URL")
-        .expect("set AUDREN_RPC_URL to a Solana Mainnet or Devnet RPC URL");
+        .or_else(|_| std::env::var("SOLANA_RPC_URL"))
+        .expect("set AUDREN_RPC_URL or SOLANA_RPC_URL to a Solana Mainnet or Devnet RPC URL");
     let kp_path = std::env::var("AUDREN_KEYPAIR_PATH")
         .expect("set AUDREN_KEYPAIR_PATH to a Solana keypair JSON path");
 
@@ -231,6 +263,9 @@ fn main() {
         pool.current_page_id, pool.total_notes, pool.total_spends
     );
 
+    // Deposit (1) + Transfer (2) = 3 slots needed on the active page (Withdraw full writes 0).
+    let page_id = ensure_active_page_capacity(&rpc_url, &payer, program_id, pool_id, pool.current_page_id, 3);
+
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
     let mut rng = StdRng::seed_from_u64(now);
     let mut alice_seed = [0u8; 32];
@@ -243,7 +278,6 @@ fn main() {
     let bob = AudrenKeys::from_seed(&bob_seed);
 
     let amount = 5_000_000u64; // 0.005 SOL
-    let page_id = pool.current_page_id;
     let (page_pda, _) = derive_epoch_page_pda(&program_id, pool_id, page_id);
 
     // 1. Shield SOL into Alice's stealth address in ONE Solana v1 transaction
