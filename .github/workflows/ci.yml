@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-and-kotlin:
+    name: Rust & Kotlin Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: examples
+      - uses: actions/checkout@v7
+        with:
+          repository: audren-xyz/audren
+          path: audren
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.97.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            examples/rust -> target
+            audren -> target
+      - name: Check & run Rust examples (quickstart & institutional-audit)
+        run: |
+          cargo check --manifest-path examples/rust/Cargo.toml --all-targets
+          cargo run --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart
+          cargo run --manifest-path examples/rust/Cargo.toml -p audren-example-institutional-audit
+      - name: Build native libaudren_ffi.so for Kotlin quickstart
+        working-directory: audren
+        run: cargo build -p audren-ffi --release
+      - uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.7.1'
+      - name: Run Kotlin (Android/JVM) quickstart
+        working-directory: examples/kotlin/quickstart
+        env:
+          AUDREN_REPO_DIR: ${{ github.workspace }}/audren
+        run: gradle run --no-daemon
+
+  typescript:
+    name: TypeScript Examples (@audren/sdk)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: examples
+      - uses: actions/checkout@v7
+        with:
+          repository: audren-xyz/audren
+          path: audren
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Build @audren/sdk and run TypeScript examples
+        run: |
+          pnpm --dir audren/packages/sdk install --frozen-lockfile
+          pnpm --dir audren/packages/sdk build
+          pnpm --dir examples/typescript install
+          pnpm --dir examples/typescript quickstart
+          pnpm --dir examples/typescript swap-plan
+          node --check examples/typescript/dataslice-scanner/index.mjs
+
+  swift:
+    name: Swift (iOS/macOS) Example
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: examples
+      - uses: actions/checkout@v7
+        with:
+          repository: audren-xyz/audren
+          path: audren
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.97.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: audren -> target
+      - name: Build native libaudren_ffi.dylib and run Swift quickstart
+        env:
+          AUDREN_REPO_DIR: ${{ github.workspace }}/audren
+        run: |
+          (cd audren && cargo build -p audren-ffi --release)
+          (cd examples/swift/quickstart && swift run)

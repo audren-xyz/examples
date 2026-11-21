@@ -5,8 +5,8 @@ edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "dd5f0eb5c1f62c8e06d6824f6b9f1f4bd23f5d1d" }
-audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "dd5f0eb5c1f62c8e06d6824f6b9f1f4bd23f5d1d" }
+audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "fa467ccea98f580d7d9a442f135ee42ee942bd42" }
+audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "fa467ccea98f580d7d9a442f135ee42ee942bd42" }
 base64 = "0.22"
 bs58 = "0.5"
 rand = "0.8.5"

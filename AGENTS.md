@@ -4,24 +4,13 @@ Rules and conventions for adding or maintaining runnable integrations in `audren
 
 ## Principles
 
-- **Runnable Standalone:** Every example must compile and execute cleanly without hidden workspace dependencies or undocumented setup steps.
+- **Import the Real SDKs (Zero Hand-Rolled Constants):** Every example across Rust (`audren-client`), TypeScript (`@audren/sdk` + `@audren/sdk/prover`), Swift (`AudrenSDK`), and Kotlin (`xyz.audren.sdk`) must consume the official SDKs from [`audren-xyz/audren`](https://github.com/audren-xyz/audren). Never duplicate PDA seeds, account offsets, binary decoders, or `JUPITER_CPI_EXCLUDED_DEXES` by hand.
+- **Six Standardized Building Blocks:** Every language folder maintains a runnable offline `quickstart` covering the exact same 6 building blocks (`keys`, `PDAs & layouts`, `dataSlice scanner`, `local ZK prover`, `disclosure & audit`, `relayer & router`).
 - **Canonical Addresses:** Target the live Mainnet & Devnet Audren program (`AUDRBK6kVkQoEGm3EB7swd34SUPqrHZeNEkB5vZWVSv3`) and canonical Pool `#0` (`5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`) unless parameterized by environment variables.
 - **Environment-Driven Credentials:** Never hardcode private RPC URLs, API keys, seed phrases, or keypairs. Read RPC endpoints and signers from `SOLANA_RPC_URL` / `AUDREN_RPC_URL` and `AUDREN_KEYPAIR_PATH`.
-- **Zero Dependencies for JS/TS Examples:** Keep Node 20+ examples zero-dependency ESM (`.mjs`) using built-in `fetch` and `crypto`.
-- **Solana Transaction Version 1 Only:** Always build, sign, and serialize Solana transactions using Transaction Version 1 (SIMD-0385 / `0x81`, 4,096 B limit, inline `TransactionConfig` compute budget via `v1::Message::try_compile_with_config` + `VersionedTransaction::try_new(VersionedMessage::V1(...))` + `wincode::serialize`). Never use legacy transactions or separate `ComputeBudgetInstruction`s.
-- **Rust Toolchain:** Pinned in `rust-toolchain.toml` (`1.98.1`). Pull `audren-core` and `audren-client` from `https://github.com/audren-xyz/audren`.
+- **Solana Transaction Version 1 Only:** Always build, sign, and serialize Solana transactions using Transaction Version 1 (SIMD-0385 / `0x81`, 4,096 B limit, inline `TransactionConfig`). Never use legacy transactions or separate `ComputeBudgetInstruction`s.
+- **Aligned Toolchain:** `rust-toolchain.toml` (`1.97.1`) matches `audren-xyz/audren`.
 
 ## Verification
 
-Before pushing changes:
-
-```bash
-cargo check --manifest-path rust/Cargo.toml --all-targets
-node --check typescript/dataslice-scanner/index.mjs
-node --check typescript/jupiter-private-swap/index.mjs
-```
-
-## Style
-
-- Keep READMEs and code comments concise, present-tense, and focused on what integrators need to build and run each flow.
-- Do not add changelog sections or historical notes to READMEs or source comments.
+Every push and PR runs `.github/workflows/ci.yml` across all 4 languages (`rust`, `typescript`, `swift`, `kotlin`).

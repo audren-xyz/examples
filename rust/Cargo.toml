@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "quickstart",
     "shielded-transfer",
     "institutional-audit",
 ]

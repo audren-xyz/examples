@@ -1,0 +1,14 @@
+{
+  "name": "audren-examples-typescript",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@audren/sdk": "file:../../audren/packages/sdk"
+  },
+  "scripts": {
+    "quickstart": "node quickstart/index.mjs",
+    "scan": "node dataslice-scanner/index.mjs",
+    "swap-plan": "node jupiter-private-swap/index.mjs"
+  }
+}

@@ -1,7 +1,20 @@
-/target
-**/target
-node_modules
+# Rust
+rust/target/
+
+# TypeScript / Node
+typescript/node_modules/
+typescript/pnpm-lock.yaml
+
+# SwiftPM
+swift/quickstart/.build/
+swift/quickstart/.swiftpm/
+
+# Gradle / Kotlin
+kotlin/quickstart/.gradle/
+kotlin/quickstart/build/
+
+# OS & Secrets
 .DS_Store
+*.keypair.json
 .env
 .env.*
-*.keypair.json
