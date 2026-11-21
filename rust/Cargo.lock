@@ -81,8 +81,8 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "audren-client"
-version = "0.2.0"
-source = "git+https://github.com/audren-xyz/audren.git?rev=939f2ec2a21a77a8e9e8eee3809415b888c28290#939f2ec2a21a77a8e9e8eee3809415b888c28290"
+version = "0.3.0"
+source = "git+https://github.com/audren-xyz/audren.git?rev=65557794bb35282775338055d3993e16436dba4b#65557794bb35282775338055d3993e16436dba4b"
 dependencies = [
  "aes-gcm",
  "audren-core",
@@ -100,12 +100,12 @@ dependencies = [
 
 [[package]]
 name = "audren-core"
-version = "0.2.0"
-source = "git+https://github.com/audren-xyz/audren.git?rev=939f2ec2a21a77a8e9e8eee3809415b888c28290#939f2ec2a21a77a8e9e8eee3809415b888c28290"
+version = "0.3.0"
+source = "git+https://github.com/audren-xyz/audren.git?rev=65557794bb35282775338055d3993e16436dba4b#65557794bb35282775338055d3993e16436dba4b"
 
 [[package]]
 name = "audren-example-institutional-audit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "audren-client",
  "audren-core",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "audren-example-quickstart"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "audren-client",
  "audren-core",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "audren-example-shielded-transfer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "audren-client",
  "audren-core",

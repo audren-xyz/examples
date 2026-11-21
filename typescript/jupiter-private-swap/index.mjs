@@ -1,12 +1,14 @@
 /**
- * Audren Example — Router-Account Mapping for `SwapViaRouter` (`Tag 5`) using `@audren/sdk`.
+ * Audren Example — Escrow Account Mapping for `ExecViaEscrow` (`Tag 5`) using `@audren/sdk`.
  *
- * Uses `@audren/sdk`'s unified `prepareRouterAccounts` (matching Rust, Swift, and Kotlin 1-to-1)
+ * Uses `@audren/sdk`'s unified `prepareEscrowAccounts` (matching Rust, Swift, and Kotlin 1-to-1)
  * to derive canonical Pool #0 `swap_escrow` shard 0 PDAs + ATAs, resolve `(escrowIdx, escrowInIdx,
  * escrowOutIdx)`, and strip the outer signer flag on `swap_escrow` (Audren signs via `invoke_signed`).
+ * Works identically for any stateless Token A -> Token B Solana DeFi CPI (DEX aggregators/AMMs,
+ * lending supply minting kTokens, yield vaults, liquid staking pools, perp LP, or RWAs).
  *
  * Run (from `typescript/`):
- *   pnpm swap-plan                  # offline router-account planning
+ *   pnpm swap-plan                  # offline escrow-account planning
  *   LIVE_QUOTE=1 pnpm swap-plan     # live Mainnet route via AudrenRelayClient (or AGGREGATOR_API)
  */
 
@@ -20,15 +22,15 @@ import {
   JUPITER_CPI_EXCLUDED_DEXES,
   WSOL_MINT,
   deriveAssociatedTokenAddress,
-  deriveSwapEscrowPda,
+  deriveEscrowPda,
   fetchAggregatorPrivateSwapRoute,
-  prepareRouterAccounts,
+  prepareEscrowAccounts,
 } from '@audren/sdk';
 
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 // Derive canonical Pool #0 swap_escrow shard 0 PDA & Classic SPL ATAs via @audren/sdk
-const { address: escrowShard0 } = await deriveSwapEscrowPda(0, 0);
+const { address: escrowShard0 } = await deriveEscrowPda(0, 0);
 const { address: escrowUsdcAta } = await deriveAssociatedTokenAddress(
   escrowShard0,
   USDC_MINT,
@@ -92,12 +94,12 @@ if (process.env.LIVE_QUOTE === '1') {
     routerAccounts = swapRes.swapInstruction.accounts;
   }
 
-  const prepared = await prepareRouterAccounts({
+  const prepared = await prepareEscrowAccounts({
     poolId: 0,
     shardId: 0,
     inputMint: USDC_MINT,
     outputMint: WSOL_MINT,
-    routerAccounts,
+    actionAccounts: routerAccounts,
   });
   const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
   assert.equal(outerSigners, 0, 'swap_escrow external signer flag must be stripped for Audren CPI');
@@ -126,17 +128,17 @@ if (process.env.LIVE_QUOTE === '1') {
     { pubkey: 'AMMVaultWsol1111111111111111111111111111111', isSigner: false, isWritable: true },
   ];
 
-  const prepared = await prepareRouterAccounts({
+  const prepared = await prepareEscrowAccounts({
     poolId: 0,
     shardId: 0,
     inputMint: USDC_MINT,
     outputMint: WSOL_MINT,
-    routerAccounts: sampleRouterAccounts,
+    actionAccounts: sampleRouterAccounts,
   });
   const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
   assert.equal(outerSigners, 0);
 
-  console.log('Offline router-account mapping via @audren/sdk (no transaction submitted)');
+  console.log('Offline ExecViaEscrow account mapping via @audren/sdk (no transaction submitted)');
   console.log({
     audrenProgramId: AUDREN_PROGRAM_ID,
     escrowPda: prepared.escrowPda,

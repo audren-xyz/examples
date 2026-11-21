@@ -50,11 +50,12 @@ let psJson = v["pool_state"] as! [String: Any]
 let epJson = v["epoch_page"] as! [String: Any]
 let audJson = v["auditor"] as! [String: Any]
 
-// 1. KEYS — Master keys, sub-account #1, aud1… address & read-only Full Viewing Key
+// 1. KEYS — Master keys, sub-account #1, DeFi Session B_0, aud1… address & read-only Full Viewing Key
 let pid = programId()
 let aliceSeed = hexToData(aliceJson["seed_hex"] as! String)
 let alice = try deriveKeysFromSeed(seed32: aliceSeed)
 let aliceSub1 = try deriveSubaccountKeys(masterSeed32: aliceSeed, accountIndex: 1)
+let aliceSession0 = try deriveDefiSessionKeypair(masterSeed32: aliceSeed, sessionIndex: 0)
 let aliceFvk = try exportFullViewingKey(seed32: aliceSeed, accountIndex: 0)
 let parsed = try parseAudrenAddress(encoded: alice.address)
 precondition(parsed.spendPk == alice.spendPk)
@@ -63,13 +64,14 @@ print("[1/6 KEYS]")
 print("  Program ID    : \(pid)")
 print("  Alice aud1    : \(alice.address)")
 print("  Subaccount #1 : \(aliceSub1.address)")
+print("  DeFi Session 0: \(aliceSession0.address)")
 print("  FVK view_pk   : \(aliceFvk.viewPkB58)")
 
 // 2. PDAs & LAYOUTS — Canonical Pool #0 PDAs & binary decoders
 let poolPda = try derivePoolPda(poolId: 0, programId: pid)
 let page0Pda = try deriveEpochPagePda(poolId: 0, pageId: 0, programId: pid)
 let solVaultPda = try deriveSolVaultPda(poolId: 0, programId: pid)
-let escrow0Pda = try deriveSwapEscrowPda(poolId: 0, shardId: 0, programId: pid)
+let escrow0Pda = try deriveEscrowPda(poolId: 0, shardId: 0, programId: pid)
 let poolState = try decodePoolState(data: hexToData(psJson["raw_hex"] as! String))
 let pageBytes = hexToData(epJson["page_hex"] as! String)
 let hdr = try decodeEpochPageHeader(data: pageBytes)
@@ -109,11 +111,13 @@ let notes = try scanEpochPage(
     programId: pid
 )
 let note = notes[0]
+let unwrapPda = try deriveUnwrapPda(poolId: 0, nullifier32: note.nullifier!, programId: pid)
 
 print("[3/6 SCANNER]")
 print("  dataSlice     : offset=\(sliceCfg.offset), length=\(sliceCfg.length) B -> matched slot \(hits[0])")
 print("  Read-only FVK : \(watchOnlyNotes[0].amount) lamports | NullifierPDA=none")
 print("  Spendable note: \(note.amount) lamports | NullifierPDA=\(note.nullifierPda ?? "")")
+print("  Unwrap PDA    : \(unwrapPda.address)")
 
 // 4. PROVER — Native ~50 ms Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
 let payer = pdasJson["proof_buffer_authority"] as! String
@@ -128,6 +132,7 @@ let depIx = try buildDepositInstruction(params: FfiDepositParams(
     mint32: Data(repeating: 0, count: 32),
     grossAmount: 500_000,
     netAmount: netDepositAmount(grossAmount: 500_000, feeBps: 0, maxFee: 0),
+    feeFromAmount: false,
     tokenProgram: nil,
     depositorAta: nil,
     vaultAta: nil
@@ -160,6 +165,9 @@ let wdIx = try buildWithdrawInstruction(params: FfiWithdrawParams(
     recipientAccount: payer,
     changeAddress: alice.address,
     amount: 1_000_000,
+    relayerFee: 0,
+    feeRecipient: nil,
+    unwrapWsol: false,
     splTokenProgram: nil,
     auditorPk32: nil
 ))
@@ -167,7 +175,7 @@ let wdIx = try buildWithdrawInstruction(params: FfiWithdrawParams(
 precondition(depIx.data.count == 139)
 precondition(xferIx.data.count == 2373)
 precondition(closeBufIx.data.count == 1)
-precondition(wdIx.data.count == 1966)
+precondition(wdIx.data.count == 1973)
 
 print("[4/6 PROVER]")
 print("  Deposit ix    : \(depIx.data.count) B (tag=\(depIx.data[0]))")
@@ -208,7 +216,7 @@ print("[5/6 DISCLOSURE & AUDIT]")
 print("  Mode 1 proof  : verified standalone & on-page (tampered rejected)")
 print("  Auditor decrypt: spent stealth_pk & asset_generator verified")
 
-// 6. RELAYER & ROUTER — Unified cross-SDK prepareRouterAccounts & defaultRelayUrl
+// 6. RELAYER & ESCROW CPI — Unified cross-SDK prepareEscrowAccounts & defaultRelayUrl
 let escrowInAta = try deriveAssociatedTokenAddress(
     ownerB58: escrow0Pda.address,
     mintB58: usdcMint,
@@ -219,14 +227,14 @@ let escrowOutAta = try deriveAssociatedTokenAddress(
     mintB58: wsolMint,
     tokenProgramB58: classicTokenProgram
 )
-let prepared = try prepareRouterAccounts(
+let prepared = try prepareEscrowAccounts(
     poolId: 0,
     shardId: 0,
     inputMintB58: usdcMint,
     outputMintB58: wsolMint,
     inputTokenProgramB58: classicTokenProgram,
     outputTokenProgramB58: classicTokenProgram,
-    routerAccounts: [
+    actionAccounts: [
         FfiAccountMeta(pubkey: escrowInAta, isSigner: false, isWritable: true),
         FfiAccountMeta(pubkey: escrowOutAta, isSigner: false, isWritable: true),
         FfiAccountMeta(pubkey: escrow0Pda.address, isSigner: true, isWritable: false),
@@ -237,7 +245,7 @@ let outerSigners = prepared.accounts.filter { $0.isSigner }.count
 precondition(prepared.escrowIdx == 2 && prepared.escrowInIdx == 0 && prepared.escrowOutIdx == 1)
 precondition(outerSigners == 0)
 
-print("[6/6 RELAYER & ROUTER]")
+print("[6/6 RELAYER & ESCROW CPI]")
 print("  Default relay : \(defaultRelayUrl())")
-print("  Router escrow : idx=\(prepared.escrowIdx), in=\(prepared.escrowInIdx), out=\(prepared.escrowOutIdx) (outer signers=\(outerSigners))")
+print("  Escrow CPI    : idx=\(prepared.escrowIdx), in=\(prepared.escrowInIdx), out=\(prepared.escrowOutIdx) (outer signers=\(outerSigners))")
 print("  Excluded DEXes: \(jupiterCpiExcludedDexes().joined(separator: ","))")

@@ -25,14 +25,15 @@ use audren_client::{
         build_withdraw, extract_transfer_auditor_ciphertexts, AudrenAccountMeta,
     },
     keys::{
-        prepare_shielded_note, AudrenAddress, AudrenKeys, AuditorKeypair, SelectiveDisclosureProof,
+        prepare_shielded_note, AudrenAddress, AudrenKeys, AuditorKeypair,
+        SelectiveDisclosureProof,
     },
     pda::{
-        derive_ata, derive_epoch_page_pda, derive_pool_pda, derive_sol_vault_pda,
-        derive_swap_escrow_pda,
+        derive_ata, derive_epoch_page_pda, derive_escrow_pda, derive_pool_pda,
+        derive_sol_vault_pda, derive_unwrap_pda,
     },
     prover::{asset_generator, extract_ring_from_page},
-    router::{prepare_router_accounts, DEFAULT_RELAY_URL, JUPITER_CPI_EXCLUDED_DEXES},
+    router::{prepare_escrow_accounts, DEFAULT_RELAY_URL, JUPITER_CPI_EXCLUDED_DEXES},
     scanner::{decrypt_owned_note, scan_page_dataslice},
 };
 use audren_core::{
@@ -215,9 +216,10 @@ fn main() {
     let pool_id = 0u32;
     let fx = load_or_build_fixture(&program_id, pool_id, &mut rng);
 
-    // 1. KEYS — Master keys, sub-account #1, aud1… address & read-only Full Viewing Key
+    // 1. KEYS — Master keys, sub-account #1, DeFi Session B_0, aud1… address & read-only Full Viewing Key
     let alice = AudrenKeys::from_seed(&fx.alice_seed);
     let alice_sub1 = AudrenKeys::from_seed_subaccount(&fx.alice_seed, 1);
+    let alice_session0 = AudrenKeys::derive_defi_session_keypair(&fx.alice_seed, 0);
     let alice_fvk = alice.full_viewing_key();
     let parsed: AudrenAddress = alice.address().to_string().parse().unwrap();
     assert_eq!(parsed.spend_pk, alice.spend_pk);
@@ -226,13 +228,14 @@ fn main() {
     println!("  Program ID    : {program_id}");
     println!("  Alice aud1    : {}", alice.address());
     println!("  Subaccount #1 : {}", alice_sub1.address());
+    println!("  DeFi Session 0: {}", alice_session0.address);
     println!("  FVK view_pk   : {}", alice_fvk.to_export().view_pk_b58);
 
     // 2. PDAs & LAYOUTS — Canonical Pool #0 PDAs & binary decoders
     let (pool_pda, _) = derive_pool_pda(&program_id, pool_id);
     let (page0_pda, _) = derive_epoch_page_pda(&program_id, pool_id, 0);
     let (sol_vault_pda, _) = derive_sol_vault_pda(&program_id, pool_id);
-    let (escrow0_pda, _) = derive_swap_escrow_pda(&program_id, pool_id, 0);
+    let (escrow0_pda, _) = derive_escrow_pda(&program_id, pool_id, 0);
     let hdr = PageHeader::decode(&fx.page_bytes).unwrap();
 
     println!("[2/6 PDAs & LAYOUTS]");
@@ -263,6 +266,7 @@ fn main() {
     )
     .unwrap()
     .expect("spendable Alice note");
+    let (unwrap_pda, _) = derive_unwrap_pda(&program_id, pool_id, &note.nullifier.unwrap());
 
     println!("[3/6 SCANNER]");
     println!(
@@ -278,6 +282,7 @@ fn main() {
         note.amount,
         note.nullifier_pda.unwrap()
     );
+    println!("  Unwrap PDA    : {unwrap_pda}");
 
     // 4. PROVER — Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
     let ring = extract_ring_from_page(&fx.page_bytes).unwrap();
@@ -333,7 +338,7 @@ fn main() {
     assert_eq!(dep_ix.data.len(), 139);
     assert_eq!(xfer_ix.data.len(), 2373);
     assert_eq!(close_buf_ix.data.len(), 1);
-    assert_eq!(wd_ix.data.len(), 1966);
+    assert_eq!(wd_ix.data.len(), 1973);
 
     println!("[4/6 PROVER]");
     println!("  Deposit ix    : {} B (tag={})", dep_ix.data.len(), dep_ix.data[0]);
@@ -367,13 +372,13 @@ fn main() {
     println!("  Mode 1 proof  : verified standalone & on-page (tampered rejected)");
     println!("  Auditor decrypt: spent stealth_pk & asset_generator verified");
 
-    // 6. RELAYER & ROUTER — Unified cross-SDK prepare_router_accounts & DEFAULT_RELAY_URL
+    // 6. RELAYER & ESCROW CPI — Unified cross-SDK prepare_escrow_accounts & DEFAULT_RELAY_URL
     let token_prog = Address::new_from_array(CLASSIC_TOKEN_PROGRAM_ID);
     let usdc_mint = Address::from_str(USDC_MINT_B58).unwrap();
     let wsol_mint = Address::from_str(WSOL_MINT_B58).unwrap();
     let escrow_in_ata = derive_ata(&escrow0_pda, &token_prog, &usdc_mint);
     let escrow_out_ata = derive_ata(&escrow0_pda, &token_prog, &wsol_mint);
-    let prepared = prepare_router_accounts(
+    let prepared = prepare_escrow_accounts(
         &program_id,
         pool_id,
         0,
@@ -392,10 +397,10 @@ fn main() {
     assert_eq!((prepared.escrow_idx, prepared.escrow_in_idx, prepared.escrow_out_idx), (2, 0, 1));
     assert_eq!(outer_signers, 0);
 
-    println!("[6/6 RELAYER & ROUTER]");
+    println!("[6/6 RELAYER & ESCROW CPI]");
     println!("  Default relay : {DEFAULT_RELAY_URL}");
     println!(
-        "  Router escrow : idx={}, in={}, out={} (outer signers={outer_signers})",
+        "  Escrow CPI    : idx={}, in={}, out={} (outer signers={outer_signers})",
         prepared.escrow_idx, prepared.escrow_in_idx, prepared.escrow_out_idx
     );
     println!("  Excluded DEXes: {JUPITER_CPI_EXCLUDED_DEXES}");

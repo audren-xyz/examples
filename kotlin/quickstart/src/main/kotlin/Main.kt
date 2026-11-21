@@ -34,11 +34,12 @@ fun main() {
     val epJson = v.getJSONObject("epoch_page")
     val audJson = v.getJSONObject("auditor")
 
-    // 1. KEYS — Master keys, sub-account #1, aud1… address & read-only Full Viewing Key
+    // 1. KEYS — Master keys, sub-account #1, DeFi Session B_0, aud1… address & read-only Full Viewing Key
     val pid = programId()
     val aliceSeed = hexToBytes(aliceJson.getString("seed_hex"))
     val alice = deriveKeysFromSeed(aliceSeed)
     val aliceSub1 = deriveSubaccountKeys(aliceSeed, 1u)
+    val aliceSession0 = deriveDefiSessionKeypair(aliceSeed, 0u)
     val aliceFvk = exportFullViewingKey(aliceSeed, 0u)
     val parsed = parseAudrenAddress(alice.address)
     check(parsed.spendPk.contentEquals(alice.spendPk))
@@ -47,13 +48,14 @@ fun main() {
     println("  Program ID    : $pid")
     println("  Alice aud1    : ${alice.address}")
     println("  Subaccount #1 : ${aliceSub1.address}")
+    println("  DeFi Session 0: ${aliceSession0.address}")
     println("  FVK view_pk   : ${aliceFvk.viewPkB58}")
 
     // 2. PDAs & LAYOUTS — Canonical Pool #0 PDAs & binary decoders
     val poolPda = derivePoolPda(0u, pid)
     val page0Pda = deriveEpochPagePda(0u, 0uL, pid)
     val solVaultPda = deriveSolVaultPda(0u, pid)
-    val escrow0Pda = deriveSwapEscrowPda(0u, 0u, pid)
+    val escrow0Pda = deriveEscrowPda(0u, 0u, pid)
     val poolState = decodePoolState(hexToBytes(psJson.getString("raw_hex")))
     val pageBytes = hexToBytes(epJson.getString("page_hex"))
     val hdr = decodeEpochPageHeader(pageBytes)
@@ -77,11 +79,13 @@ fun main() {
     val watchOnly = scanEpochPage(0u, pageBytes, null, alice.spendPk, alice.viewSk, pid).first()
     check(watchOnly.nullifierPda == null)
     val note = scanEpochPage(0u, pageBytes, alice.spendSk, alice.spendPk, alice.viewSk, pid).first()
+    val unwrapPda = deriveUnwrapPda(0u, note.nullifier!!, pid)
 
     println("[3/6 SCANNER]")
     println("  dataSlice     : offset=${sliceCfg.offset}, length=${sliceCfg.length} B -> matched slot ${hits[0]}")
     println("  Read-only FVK : ${watchOnly.amount} lamports | NullifierPDA=none")
     println("  Spendable note: ${note.amount} lamports | NullifierPDA=${note.nullifierPda}")
+    println("  Unwrap PDA    : ${unwrapPda.address}")
 
     // 4. PROVER — Native ~50 ms Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
     val payer = pdasJson.getString("proof_buffer_authority")
@@ -97,6 +101,7 @@ fun main() {
             mint32 = ByteArray(32),
             grossAmount = 500_000uL,
             netAmount = netDepositAmount(500_000uL, 0u, 0uL),
+            feeFromAmount = false,
             tokenProgram = null,
             depositorAta = null,
             vaultAta = null,
@@ -133,6 +138,9 @@ fun main() {
             recipientAccount = payer,
             changeAddress = alice.address,
             amount = 1_000_000uL,
+            relayerFee = 0uL,
+            feeRecipient = null,
+            unwrapWsol = false,
             splTokenProgram = null,
             auditorPk32 = null,
         ),
@@ -141,7 +149,7 @@ fun main() {
     check(depIx.data.size == 139)
     check(xferIx.data.size == 2373)
     check(closeBufIx.data.size == 1)
-    check(wdIx.data.size == 1966)
+    check(wdIx.data.size == 1973)
 
     println("[4/6 PROVER]")
     println("  Deposit ix    : ${depIx.data.size} B (tag=${depIx.data[0]})")
@@ -169,10 +177,10 @@ fun main() {
     println("  Mode 1 proof  : verified standalone & on-page (tampered rejected)")
     println("  Auditor decrypt: spent stealth_pk & asset_generator verified")
 
-    // 6. RELAYER & ROUTER — Unified cross-SDK prepareRouterAccounts & defaultRelayUrl
+    // 6. RELAYER & ESCROW CPI — Unified cross-SDK prepareEscrowAccounts & defaultRelayUrl
     val escrowInAta = deriveAssociatedTokenAddress(escrow0Pda.address, USDC_MINT, CLASSIC_TOKEN_PROGRAM)
     val escrowOutAta = deriveAssociatedTokenAddress(escrow0Pda.address, WSOL_MINT, CLASSIC_TOKEN_PROGRAM)
-    val prepared = prepareRouterAccounts(
+    val prepared = prepareEscrowAccounts(
         0u,
         0u,
         USDC_MINT,
@@ -190,8 +198,8 @@ fun main() {
     check(prepared.escrowIdx == 2.toUByte() && prepared.escrowInIdx == 0.toUByte() && prepared.escrowOutIdx == 1.toUByte())
     check(outerSigners == 0)
 
-    println("[6/6 RELAYER & ROUTER]")
+    println("[6/6 RELAYER & ESCROW CPI]")
     println("  Default relay : ${defaultRelayUrl()}")
-    println("  Router escrow : idx=${prepared.escrowIdx}, in=${prepared.escrowInIdx}, out=${prepared.escrowOutIdx} (outer signers=$outerSigners)")
+    println("  Escrow CPI    : idx=${prepared.escrowIdx}, in=${prepared.escrowInIdx}, out=${prepared.escrowOutIdx} (outer signers=$outerSigners)")
     println("  Excluded DEXes: ${jupiterCpiExcludedDexes().joinToString(",")}")
 }

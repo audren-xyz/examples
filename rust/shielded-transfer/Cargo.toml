@@ -1,12 +1,12 @@
 [package]
 name = "audren-example-shielded-transfer"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "939f2ec2a21a77a8e9e8eee3809415b888c28290" }
-audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "939f2ec2a21a77a8e9e8eee3809415b888c28290" }
+audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "65557794bb35282775338055d3993e16436dba4b" }
+audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "65557794bb35282775338055d3993e16436dba4b" }
 base64 = "0.22"
 bs58 = "0.5"
 rand = "0.8.5"

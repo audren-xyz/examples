@@ -27,11 +27,12 @@ import {
   decodePoolState,
   deriveAssociatedTokenAddress,
   deriveEpochPagePda,
+  deriveEscrowPda,
   derivePoolPda,
   deriveSolVaultPda,
-  deriveSwapEscrowPda,
+  deriveUnwrapPda,
   parseAudrenAddress,
-  prepareRouterAccounts,
+  prepareEscrowAccounts,
 } from '@audren/sdk';
 import {
   NATIVE_SOL_MINT,
@@ -43,6 +44,7 @@ import {
   buildWithdrawInstruction,
   createSelectiveDisclosureProof,
   deriveAuditorKeypair,
+  deriveDefiSessionKeypair,
   deriveKeysFromSeed,
   deriveSubaccountKeys,
   exportFullViewingKey,
@@ -60,10 +62,11 @@ const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const audrenRepo = process.env.AUDREN_REPO_DIR ?? resolve(import.meta.dirname, '../../../audren');
 const vectors = JSON.parse(readFileSync(resolve(audrenRepo, 'spec/test-vectors.json'), 'utf8'));
 
-// 1. KEYS — Master keys, sub-account #1, aud1… address & read-only Full Viewing Key
+// 1. KEYS — Master keys, sub-account #1, DeFi Session B_0, aud1… address & read-only Full Viewing Key
 const aliceSeed = fromHex(vectors.alice.seed_hex);
 const alice = await deriveKeysFromSeed(aliceSeed);
 const aliceSub1 = await deriveSubaccountKeys(aliceSeed, 1);
+const aliceSession0 = await deriveDefiSessionKeypair(aliceSeed, 0);
 const aliceFvk = exportFullViewingKey(alice);
 const parsed = parseAudrenAddress(alice.address);
 assert.equal(toHex(parsed.spendPk), vectors.alice.spend_pk_hex);
@@ -72,13 +75,14 @@ console.log('[1/6 KEYS]');
 console.log(`  Program ID    : ${AUDREN_PROGRAM_ID}`);
 console.log(`  Alice aud1    : ${alice.address}`);
 console.log(`  Subaccount #1 : ${aliceSub1.address}`);
+console.log(`  DeFi Session 0: ${aliceSession0.address}`);
 console.log(`  FVK view_pk   : ${aliceFvk.viewPkB58}`);
 
 // 2. PDAs & LAYOUTS — Canonical Pool #0 PDAs & binary decoders
 const poolPda = await derivePoolPda(0);
 const page0Pda = await deriveEpochPagePda(0, 0n);
 const solVaultPda = await deriveSolVaultPda(0);
-const escrow0Pda = await deriveSwapEscrowPda(0, 0);
+const escrow0Pda = await deriveEscrowPda(0, 0);
 const poolState = decodePoolState(fromHex(vectors.pool_state.raw_hex));
 const pageBytes = fromHex(vectors.epoch_page.page_hex);
 const hdr = decodePageHeader(pageBytes);
@@ -97,11 +101,13 @@ assert.deepEqual(hits, [5]);
 const [watchOnly] = await scanEpochPage(aliceFvk, pageBytes, 0);
 assert.equal(watchOnly.nullifierPdaB58, undefined);
 const [note] = await scanEpochPageSpendable(alice, pageBytes, 0);
+const unwrapPda = await deriveUnwrapPda(0, note.nullifier);
 
 console.log('[3/6 SCANNER]');
 console.log(`  dataSlice     : offset=${PAGE_SCAN_DATA_SLICE.offset}, length=${PAGE_SCAN_DATA_SLICE.length} B -> matched slot ${hits[0]}`);
 console.log(`  Read-only FVK : ${watchOnly.amount} lamports | NullifierPDA=none`);
 console.log(`  Spendable note: ${note.amount} lamports | NullifierPDA=${note.nullifierPdaB58}`);
+console.log(`  Unwrap PDA    : ${unwrapPda.address}`);
 
 // 4. PROVER — Pure-TS Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
 const payer = base58Decode(vectors.pdas.proof_buffer_authority);
@@ -146,7 +152,7 @@ const { instruction: wdIx } = await buildWithdrawInstruction({
 assert.equal(depIx.data.length, 139);
 assert.equal(xferIx.data.length, 2373);
 assert.equal(closeBufIx.data.length, 1);
-assert.equal(wdIx.data.length, 1966);
+assert.equal(wdIx.data.length, 1973);
 
 console.log('[4/6 PROVER]');
 console.log(`  Deposit ix    : ${depIx.data.length} B (tag=${depIx.data[0]})`);
@@ -174,7 +180,7 @@ console.log('[5/6 DISCLOSURE & AUDIT]');
 console.log('  Mode 1 proof  : verified standalone & on-page (tampered rejected)');
 console.log('  Auditor decrypt: spent stealth_pk & asset_generator verified');
 
-// 6. RELAYER & ROUTER — Unified cross-SDK prepareRouterAccounts & AUDREN_DEFAULT_RELAY_URL
+// 6. RELAYER & ESCROW CPI — Unified cross-SDK prepareEscrowAccounts & AUDREN_DEFAULT_RELAY_URL
 const { address: escrowInAta } = await deriveAssociatedTokenAddress(
   escrow0Pda.address,
   USDC_MINT,
@@ -185,12 +191,12 @@ const { address: escrowOutAta } = await deriveAssociatedTokenAddress(
   WSOL_MINT,
   CLASSIC_TOKEN_PROGRAM_ID,
 );
-const prepared = await prepareRouterAccounts({
+const prepared = await prepareEscrowAccounts({
   poolId: 0,
   shardId: 0,
   inputMint: USDC_MINT,
   outputMint: WSOL_MINT,
-  routerAccounts: [
+  actionAccounts: [
     { pubkey: escrowInAta, isSigner: false, isWritable: true },
     { pubkey: escrowOutAta, isSigner: false, isWritable: true },
     { pubkey: escrow0Pda.address, isSigner: true, isWritable: false },
@@ -200,7 +206,7 @@ const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
 assert.deepEqual([prepared.escrowIdx, prepared.escrowInIdx, prepared.escrowOutIdx], [2, 0, 1]);
 assert.equal(outerSigners, 0);
 
-console.log('[6/6 RELAYER & ROUTER]');
+console.log('[6/6 RELAYER & ESCROW CPI]');
 console.log(`  Default relay : ${AUDREN_DEFAULT_RELAY_URL}`);
-console.log(`  Router escrow : idx=${prepared.escrowIdx}, in=${prepared.escrowInIdx}, out=${prepared.escrowOutIdx} (outer signers=${outerSigners})`);
+console.log(`  Escrow CPI    : idx=${prepared.escrowIdx}, in=${prepared.escrowInIdx}, out=${prepared.escrowOutIdx} (outer signers=${outerSigners})`);
 console.log(`  Excluded DEXes: ${JUPITER_CPI_EXCLUDED_DEXES.join(',')}`);
