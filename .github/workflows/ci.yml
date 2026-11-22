@@ -30,20 +30,21 @@ jobs:
           workspaces: |
             examples/rust -> target
             audren -> target
-      - name: Check & run Rust V2 examples (quickstart & institutional-audit)
+      - name: Check & run Rust examples (quickstart, institutional-audit, shielded-transfer)
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
-          cargo check --manifest-path examples/rust/Cargo.toml --all-targets
+          cargo clippy --manifest-path examples/rust/Cargo.toml --all-targets -- -D warnings
           cargo run --release --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
           cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-institutional-audit
+          cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-shielded-transfer
       - uses: pnpm/action-setup@v6
         with:
           version: 10
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Build @audren/sdk and run TypeScript V2 examples (including WASM Groth16 prover)
+      - name: Build @audren/sdk and run TypeScript examples (including WASM Groth16 prover)
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
@@ -63,7 +64,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.7.1'
-      - name: Run Kotlin (Android/JVM) V2 quickstart
+      - name: Run Kotlin (Android/JVM) quickstart
         working-directory: examples/kotlin/quickstart
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
@@ -75,7 +76,7 @@ jobs:
           echo "100% byte-for-byte canonical stdout parity verified: Rust == TypeScript == Kotlin"
 
   swift-parity:
-    name: Swift (iOS/macOS) V2 Example (+ Rust Parity)
+    name: Swift (iOS/macOS) Example (+ Rust Parity)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7

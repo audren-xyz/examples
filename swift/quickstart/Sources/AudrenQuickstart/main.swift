@@ -27,11 +27,13 @@ private struct MemoVector: Decodable {
     let memo_90_hex: String
 }
 private struct Groth16Vector: Decodable {
+    let super_root_hex: String
     let nf0_hex: String
     let nf1_hex: String
     let cm0_hex: String
     let cm1_hex: String
     let cm2_hex: String
+    let public_input_hash_hex: String
     let proof_192_hex: String
 }
 private struct PoolStateVector: Decodable {
@@ -226,6 +228,97 @@ let ctxExec = try computeExecCtxHashFfi(params: FfiExecCtxHashParams(
     changeMemos: enc.memo90
 ))
 
+// Real 192-byte BN254 Groth16 proof via native UniFFI `proveJoinsplitWitnessBytes`
+let zeroHashes = [
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
+    "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
+    "1b98ec5a992cd3688e655aef8674386f4e84f0a442eaab4840427e359c214dd2",
+    "0fd83a3939005974d559c13c652a31942ffd61cab9a038e04239af96cafaee14",
+    "11eb54967ae25ce42205223461cda9dbb1a1811db38b71e404d1fd94c9627777",
+    "1c682a99981cf10a215d2788721e0ca060ddc0932cbb04c903eee3bd899dcfc0",
+    "2b3de1ae8e72d64a5cb03934061e3fd03789273f370e32d576ae54b4cbeca719",
+    "1b64ed0dc55f80f1f3da256b451baf16110fc268311a13fe903f87945b734861",
+    "06efb4c4a55b0225fd1088d357b2432f422b0593015c57980e373ecef9029c72",
+    "262138dff44f5352d2d7ec48461c771444a6c00c761a3263735d0a99143a51f1",
+    "07ea118d86ace14a8eaa26fc18b36fefe7d5f5b00e0eb9ebfd1c88f37131c178",
+    "0c2a4af81a2cd78159ce2f3d7ee05367fc5b3c3e1becea2a86d1e66dd27ffb7f",
+    "1a953a710c22f79c369c976fc9981ffdbfe236695297fec65886e645e6fa2884",
+    "16b0c5e286286eb6c4774ad6292b4f0bdc5b36cb7890b27544268892ae255e0d",
+    "2dd7186449cc82702fb8f2d7fa86e0095263f8afb521e1976f499e67a0d7cbb8",
+    "151399c724e17408a7a43cdadba2fc000da9339c56e4d49c6cdee6c4356fbc68",
+    "1905d56dc6be6157b64b80d21a207b96e862aea4b68f4674ce4c1b7db4a8bc2e",
+    "16d33ae1e54afb1453fc544206899ddf3e1a5bdc7f6d8993550aa6876a380319",
+    "16e195c570f224cc86219527096fa55516cc9ee1b96764dd263db0884983fdaf",
+]
+func u64Le(_ x: UInt64) -> Data {
+    var le = x.littleEndian
+    return Data(bytes: &le, count: 8)
+}
+func u64Be32(_ x: UInt64) -> Data {
+    var be = x.bigEndian
+    return Data(repeating: 0, count: 24) + Data(bytes: &be, count: 8)
+}
+let solAsset = hexToData(v.asset_ids.native_sol_asset_id_hex)
+var witness = Data(capacity: 4611)
+witness.append(hexToData(v.groth16.super_root_hex))
+witness.append(solAsset)
+witness.append(Data(repeating: 0, count: 32))
+witness.append(u64Le(0))
+witness.append(u64Le(0))
+witness.append(ctxPriv)
+witness.append(1) // omit_nf1 = true
+
+// Input 0: real note at lane 2, leaf 5
+witness.append(alice.spendSk)
+witness.append(enc.tweak)
+witness.append(solAsset)
+witness.append(u64Le(amount))
+witness.append(enc.blinding)
+witness.append(0) // is_dummy = false
+var pos = [UInt8](repeating: 0, count: 20)
+pos[0] = 1
+pos[1] = 1
+pos[18] = 2
+witness.append(contentsOf: pos)
+for zh in zeroHashes {
+    let z = hexToData(zh)
+    witness.append(z)
+    witness.append(z)
+    witness.append(z)
+}
+
+// Input 1: dummy
+witness.append(alice.spendSk)
+witness.append(Data(repeating: 0, count: 32))
+witness.append(solAsset)
+witness.append(u64Le(0))
+witness.append(u64Be32(0x5555))
+witness.append(1) // is_dummy = true
+witness.append(Data(repeating: 0, count: 20 + 20 * 3 * 32))
+
+// Outputs 0, 1, 2
+witness.append(hexToData("297407e33a8667d5d8235b00a22b34f66113f3d1b9c5486704f12647a0ee1041"))
+witness.append(solAsset)
+witness.append(u64Le(1_000_000))
+witness.append(u64Be32(0x201))
+
+witness.append(hexToData("20944e988ecb9bf1ad2edbbc8b782ff1695fcd197058948fdf9ef6426fa55528"))
+witness.append(solAsset)
+witness.append(u64Le(500_000))
+witness.append(u64Be32(0x202))
+
+witness.append(Data(repeating: 0, count: 32))
+witness.append(solAsset)
+witness.append(u64Le(0))
+witness.append(u64Be32(0x203))
+precondition(witness.count == 4611)
+
+let proved = try proveJoinsplitWitnessBytes(witness4611: witness, seed32: Data(repeating: 0x99, count: 32))
+precondition(dataToHex(proved.proof192) == v.groth16.proof_192_hex)
+precondition(dataToHex(proved.nf0) == v.groth16.nf0_hex)
+precondition(dataToHex(proved.publicInputHash) == v.groth16.public_input_hash_hex)
+
 let depIx = try buildDepositSolIx(params: FfiDepositSolParams(
     programId: pid,
     depositor: sess0.pubkeyB58,
@@ -240,7 +333,7 @@ let depIx = try buildDepositSolIx(params: FfiDepositSolParams(
     blinding: enc.blinding,
     memo90: enc.memo90
 ))
-let proof192 = hexToData(v.groth16.proof_192_hex)
+let proof192 = proved.proof192
 let jsIx = try buildJoinsplitIx(params: FfiJoinSplitParams(
     programId: pid,
     payer: sess0.pubkeyB58,
@@ -259,11 +352,11 @@ let jsIx = try buildJoinsplitIx(params: FfiJoinSplitParams(
     splVaultAta: nil,
     splTokenProg: nil,
     proof192: proof192,
-    nf0: hexToData(v.groth16.nf0_hex),
-    nf1: hexToData(v.groth16.nf1_hex),
-    cm0: hexToData(v.groth16.cm0_hex),
-    cm1: hexToData(v.groth16.cm1_hex),
-    cm2: hexToData(v.groth16.cm2_hex),
+    nf0: proved.nf0,
+    nf1: proved.nf1,
+    cm0: proved.cm0,
+    cm1: proved.cm1,
+    cm2: proved.cm2,
     publicAmountOut: 0,
     relayerFeeAmount: 0,
     recipient: systemProgramId,

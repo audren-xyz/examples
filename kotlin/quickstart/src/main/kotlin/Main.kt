@@ -170,6 +170,93 @@ fun main() {
         )
     )
 
+    // Real 192-byte BN254 Groth16 proof via native UniFFI `proveJoinsplitWitnessBytes`
+    val zeroHashes = listOf(
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
+        "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
+        "1b98ec5a992cd3688e655aef8674386f4e84f0a442eaab4840427e359c214dd2",
+        "0fd83a3939005974d559c13c652a31942ffd61cab9a038e04239af96cafaee14",
+        "11eb54967ae25ce42205223461cda9dbb1a1811db38b71e404d1fd94c9627777",
+        "1c682a99981cf10a215d2788721e0ca060ddc0932cbb04c903eee3bd899dcfc0",
+        "2b3de1ae8e72d64a5cb03934061e3fd03789273f370e32d576ae54b4cbeca719",
+        "1b64ed0dc55f80f1f3da256b451baf16110fc268311a13fe903f87945b734861",
+        "06efb4c4a55b0225fd1088d357b2432f422b0593015c57980e373ecef9029c72",
+        "262138dff44f5352d2d7ec48461c771444a6c00c761a3263735d0a99143a51f1",
+        "07ea118d86ace14a8eaa26fc18b36fefe7d5f5b00e0eb9ebfd1c88f37131c178",
+        "0c2a4af81a2cd78159ce2f3d7ee05367fc5b3c3e1becea2a86d1e66dd27ffb7f",
+        "1a953a710c22f79c369c976fc9981ffdbfe236695297fec65886e645e6fa2884",
+        "16b0c5e286286eb6c4774ad6292b4f0bdc5b36cb7890b27544268892ae255e0d",
+        "2dd7186449cc82702fb8f2d7fa86e0095263f8afb521e1976f499e67a0d7cbb8",
+        "151399c724e17408a7a43cdadba2fc000da9339c56e4d49c6cdee6c4356fbc68",
+        "1905d56dc6be6157b64b80d21a207b96e862aea4b68f4674ce4c1b7db4a8bc2e",
+        "16d33ae1e54afb1453fc544206899ddf3e1a5bdc7f6d8993550aa6876a380319",
+        "16e195c570f224cc86219527096fa55516cc9ee1b96764dd263db0884983fdaf"
+    )
+    fun u64Le(x: Long): ByteArray = ByteArray(8) { i -> ((x ushr (i * 8)) and 0xff).toByte() }
+    fun u64Be32(x: Long): ByteArray = ByteArray(32).also { b ->
+        for (i in 0 until 8) b[24 + i] = ((x ushr ((7 - i) * 8)) and 0xff).toByte()
+    }
+    val g16 = v.getJSONObject("groth16")
+    val solAsset = hexToBytes(assetIds.getString("native_sol_asset_id_hex"))
+    val w = java.io.ByteArrayOutputStream(4611)
+    w.write(hexToBytes(g16.getString("super_root_hex")))
+    w.write(solAsset)
+    w.write(ByteArray(32))
+    w.write(u64Le(0L))
+    w.write(u64Le(0L))
+    w.write(ctxPriv)
+    w.write(1) // omit_nf1 = true
+
+    // Input 0: real note at lane 2, leaf 5
+    w.write(alice.spendSk)
+    w.write(enc.tweak)
+    w.write(solAsset)
+    w.write(u64Le(memoJson.getLong("amount")))
+    w.write(enc.blinding)
+    w.write(0) // is_dummy = false
+    val pos = ByteArray(20)
+    pos[0] = 1
+    pos[1] = 1
+    pos[18] = 2
+    w.write(pos)
+    for (zh in zeroHashes) {
+        val z = hexToBytes(zh)
+        repeat(3) { w.write(z) }
+    }
+
+    // Input 1: dummy
+    w.write(alice.spendSk)
+    w.write(ByteArray(32))
+    w.write(solAsset)
+    w.write(u64Le(0L))
+    w.write(u64Be32(0x5555L))
+    w.write(1) // is_dummy = true
+    w.write(ByteArray(20 + 20 * 3 * 32))
+
+    // Outputs 0, 1, 2
+    w.write(hexToBytes("297407e33a8667d5d8235b00a22b34f66113f3d1b9c5486704f12647a0ee1041"))
+    w.write(solAsset)
+    w.write(u64Le(1_000_000L))
+    w.write(u64Be32(0x201L))
+
+    w.write(hexToBytes("20944e988ecb9bf1ad2edbbc8b782ff1695fcd197058948fdf9ef6426fa55528"))
+    w.write(solAsset)
+    w.write(u64Le(500_000L))
+    w.write(u64Be32(0x202L))
+
+    w.write(ByteArray(32))
+    w.write(solAsset)
+    w.write(u64Le(0L))
+    w.write(u64Be32(0x203L))
+
+    val witnessBytes = w.toByteArray()
+    check(witnessBytes.size == 4611)
+    val proved = proveJoinsplitWitnessBytes(witnessBytes, ByteArray(32) { 0x99.toByte() })
+    check(bytesToHex(proved.proof192) == g16.getString("proof_192_hex"))
+    check(bytesToHex(proved.nf0) == g16.getString("nf0_hex"))
+    check(bytesToHex(proved.publicInputHash) == g16.getString("public_input_hash_hex"))
+
     val depIx = buildDepositSolIx(
         FfiDepositSolParams(
             programId = pid,
@@ -186,8 +273,7 @@ fun main() {
             memo90 = enc.memo90
         )
     )
-    val g16 = v.getJSONObject("groth16")
-    val proof192 = hexToBytes(g16.getString("proof_192_hex"))
+    val proof192 = proved.proof192
     val jsIx = buildJoinsplitIx(
         FfiJoinSplitParams(
             programId = pid,
@@ -207,11 +293,11 @@ fun main() {
             splVaultAta = null,
             splTokenProg = null,
             proof192 = proof192,
-            nf0 = hexToBytes(g16.getString("nf0_hex")),
-            nf1 = hexToBytes(g16.getString("nf1_hex")),
-            cm0 = hexToBytes(g16.getString("cm0_hex")),
-            cm1 = hexToBytes(g16.getString("cm1_hex")),
-            cm2 = hexToBytes(g16.getString("cm2_hex")),
+            nf0 = proved.nf0,
+            nf1 = proved.nf1,
+            cm0 = proved.cm0,
+            cm1 = proved.cm1,
+            cm2 = proved.cm2,
             publicAmountOut = 0uL,
             relayerFeeAmount = 0uL,
             recipient = SYSTEM_PROGRAM_ID,

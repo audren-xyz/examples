@@ -233,8 +233,8 @@ fn main() {
     let leaves = [Fr::from(0u64), Fr::from(0u64), Fr::from(0u64), Fr::from(0u64), Fr::from(0u64), cm_fr];
     let zh = zero_hashes_4ary();
     let mut lroot = compute_subtree_256_root(&leaves, 6);
-    for h in 4..18 {
-        lroot = poseidon4(lroot, zh[h], zh[h], zh[h]);
+    for z in zh.iter().take(18).skip(4) {
+        lroot = poseidon4(lroot, *z, *z, *z);
     }
     let mut lane_roots = [zh[18]; NUM_LANES];
     lane_roots[2] = lroot;
@@ -289,8 +289,8 @@ fn main() {
     assert_eq!(to_hex(&proved.proof_192), v["groth16"]["proof_192_hex"].as_str().unwrap());
 
     let dep_ix = build_deposit_sol(
-        program_id.clone(),
-        sess0_addr.clone(),
+        program_id,
+        sess0_addr,
         pool_id,
         2,
         7,

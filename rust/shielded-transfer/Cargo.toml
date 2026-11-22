@@ -1,14 +1,12 @@
 [package]
 name = "audren-example-shielded-transfer"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
 audren-client = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
-audren-core = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
 base64 = "0.22.1"
-bs58 = "0.5"
 rand = "0.8.5"
 serde_json = "1"
 solana-address = { version = "~2.7.0", features = ["curve25519", "std"] }

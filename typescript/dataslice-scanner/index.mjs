@@ -58,9 +58,16 @@ console.log({
   unspentNotes: store.unspentNotes().length,
 });
 
+const cluster =
+  process.env.AUDREN_CLUSTER === 'devnet' || process.env.AUDREN_CLUSTER === 'mainnet'
+    ? process.env.AUDREN_CLUSTER
+    : /devnet/i.test(rpcUrl)
+      ? 'devnet'
+      : 'mainnet';
+
 try {
   const relay = new AudrenRelayClient(process.env.AUDREN_RELAY_URL ?? AUDREN_DEFAULT_RELAY_URL);
-  const info = await relay.getInfo('mainnet');
+  const info = await relay.getInfo(cluster);
   console.log('\n=== Audren Privacy Relayer Info ===');
   console.log({
     relayUrl: relay.baseUrl,

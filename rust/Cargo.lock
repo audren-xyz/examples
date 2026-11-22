@@ -259,8 +259,8 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "audren-circuits"
-version = "1.1.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#62b5bdb44ce4fdacdac588f0d194802a7e625155"
+version = "1.1.1"
+source = "git+https://github.com/audren-xyz/audren.git?branch=main#936cc659bd6286417a692e7970d3cbd91a49e9bd"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -282,8 +282,8 @@ dependencies = [
 
 [[package]]
 name = "audren-client"
-version = "1.1.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#62b5bdb44ce4fdacdac588f0d194802a7e625155"
+version = "1.1.1"
+source = "git+https://github.com/audren-xyz/audren.git?branch=main#936cc659bd6286417a692e7970d3cbd91a49e9bd"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -299,44 +299,38 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "solana-address",
- "solana-sha256-hasher",
  "x25519-dalek",
 ]
 
 [[package]]
 name = "audren-core"
-version = "1.1.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#62b5bdb44ce4fdacdac588f0d194802a7e625155"
+version = "1.1.1"
+source = "git+https://github.com/audren-xyz/audren.git?branch=main#936cc659bd6286417a692e7970d3cbd91a49e9bd"
 
 [[package]]
 name = "audren-example-institutional-audit"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "audren-client",
- "audren-core",
  "rand 0.8.8",
- "solana-address",
 ]
 
 [[package]]
 name = "audren-example-quickstart"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "ark-bn254",
  "audren-client",
- "audren-core",
  "serde_json",
  "solana-address",
 ]
 
 [[package]]
 name = "audren-example-shielded-transfer"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "audren-client",
- "audren-core",
  "base64",
- "bs58",
  "rand 0.8.8",
  "serde_json",
  "solana-address",

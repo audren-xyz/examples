@@ -1,4 +1,11 @@
-//! Audren Live Solana Transaction v1 (`0x81`) Shielded Lifecycle (Rust SDK — `audren-client`).
+//! Audren Offline Solana Transaction v1 (`0x81`) Shielded Deposit Wire Builder (Rust SDK — `audren-client`).
+//!
+//! Compiles and signs a canonical Solana Transaction v1 (`0x81`, `4,096 B`, inline `TransactionConfig`)
+//! bundling `OpenPage` (`SubtreePage`, `SubtreeRootPage`, `MemoPage`), `DepositSol`, and
+//! `PublishCheckpoint` into a single `wincode`-serialized wire packet ready for RPC submission.
+//!
+//! Optionally pass `AUDREN_KEYPAIR_PATH=/path/to/keypair.json` to sign with an existing Solana
+//! JSON keypair; otherwise a fresh ephemeral Ed25519 keypair is generated offline.
 
 use std::fs;
 
@@ -11,7 +18,6 @@ use audren_client::{
     instructions::{build_deposit_sol, build_open_page, build_publish_checkpoint, AudrenInstruction},
     keys::{encrypt_note_memo, AudrenKeys},
     pda::{derive_lane_pda, derive_pool_pda},
-    scanner::{decode_lane_header, decode_pool_state},
 };
 use base64::Engine as _;
 use rand::RngCore;
@@ -59,17 +65,21 @@ fn compile_v1_tx(
     wincode::serialize(&tx).expect("serialize v1 wire bytes")
 }
 
-fn main() {
-    let rpc_url = std::env::var("AUDREN_RPC_URL")
-        .or_else(|_| std::env::var("SOLANA_RPC_URL"))
-        .expect("Set AUDREN_RPC_URL to a Solana RPC endpoint");
-    let kp_path = std::env::var("AUDREN_KEYPAIR_PATH")
-        .expect("Set AUDREN_KEYPAIR_PATH to a funded Solana JSON keypair");
+fn load_or_generate_payer() -> (Keypair, &'static str) {
+    if let Ok(kp_path) = std::env::var("AUDREN_KEYPAIR_PATH") {
+        let kp_bytes: Vec<u8> =
+            serde_json::from_str(&fs::read_to_string(&kp_path).expect("read keypair"))
+                .expect("parse keypair JSON");
+        return (
+            Keypair::try_from(kp_bytes.as_slice()).expect("valid keypair"),
+            "AUDREN_KEYPAIR_PATH",
+        );
+    }
+    (Keypair::new(), "ephemeral offline keypair")
+}
 
-    let kp_bytes: Vec<u8> =
-        serde_json::from_str(&fs::read_to_string(&kp_path).expect("read keypair"))
-            .expect("parse keypair JSON");
-    let payer = Keypair::try_from(kp_bytes.as_slice()).expect("valid keypair");
+fn main() {
+    let (payer, payer_source) = load_or_generate_payer();
     let program_id = Address::new_from_array(AUDREN_PROGRAM_ID);
     let pool_id = 0u32;
 
@@ -110,10 +120,10 @@ fn main() {
     ];
 
     let wire = compile_v1_tx(&payer, Hash::default(), &ixs, 250_000);
+    assert_eq!(wire[0], 0x81, "Solana Transaction v1 wire packet must begin with 0x81");
     let b64 = base64::engine::general_purpose::STANDARD.encode(&wire);
-    let _ = (decode_pool_state, decode_lane_header, bs58::encode(&wire).into_string());
 
-    println!("RPC configured  : {rpc_url}");
+    println!("Payer           : {} ({payer_source})", payer.pubkey());
     println!("Program ID      : {program_id}");
     println!("Pool #0 PDA     : {pool_pda}");
     println!("Lane #0 PDA     : {lane0_pda}");

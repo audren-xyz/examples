@@ -47,8 +47,7 @@ git clone https://github.com/audren-xyz/examples.git
 ```bash
 cargo run --release --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart
 cargo run --manifest-path examples/rust/Cargo.toml -p audren-example-institutional-audit
-AUDREN_RPC_URL="https://your-devnet-rpc" AUDREN_KEYPAIR_PATH="/path/to/keypair.json" \
-  cargo run --manifest-path examples/rust/Cargo.toml -p audren-example-shielded-transfer
+cargo run --manifest-path examples/rust/Cargo.toml -p audren-example-shielded-transfer
 ```
 
 ### 2. TypeScript (`@audren/sdk` + `@audren/sdk/prover` WASM)
@@ -75,7 +74,7 @@ SOLANA_RPC_URL="https://your-solana-rpc" pnpm --dir examples/typescript scan
 (cd examples/kotlin/quickstart && gradle run)
 ```
 
-> Override the sibling `../audren` path at any time with `AUDREN_REPO_DIR=/path/to/audren`.
+> Override the sibling `../audren` path for `spec/test-vectors.json` and Swift/Kotlin local SDK resolution with `AUDREN_REPO_DIR=/path/to/audren` (TypeScript `package.json` resolves `file:../../audren/packages/sdk`, and Rust examples depend on `audren-xyz/audren` via Cargo git).
 
 ## Scope and safety
 
