@@ -8,7 +8,7 @@ repositories {
 }
 
 dependencies {
-    implementation("xyz.audren:audren-sdk-kotlin:0.2.0")
+    implementation("xyz.audren:audren-sdk-kotlin:1.0.0")
     implementation("org.json:json:20250107")
 }
 

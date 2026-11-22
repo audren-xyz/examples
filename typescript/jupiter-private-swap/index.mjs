@@ -1,19 +1,15 @@
 /**
- * Audren Example — Escrow Account Mapping for `ExecViaEscrow` (`Tag 5`) using `@audren/sdk`.
+ * Audren Example — Isolated Escrow Account Mapping for `ExecViaEscrow` (`Tag 7`) using `@audren/sdk`.
  *
- * Uses `@audren/sdk`'s unified `prepareEscrowAccounts` (matching Rust, Swift, and Kotlin 1-to-1)
- * to derive canonical Pool #0 `swap_escrow` shard 0 PDAs + ATAs, resolve `(escrowIdx, escrowInIdx,
- * escrowOutIdx)`, and strip the outer signer flag on `swap_escrow` (Audren signs via `invoke_signed`).
- * Works identically for any stateless Token A -> Token B Solana DeFi CPI (DEX aggregators/AMMs,
- * lending supply minting kTokens, yield vaults, liquid staking pools, perp LP, or RWAs).
+ * Derives canonical Pool #0 `audren_v2_escrow` shard 0 PDA & Classic SPL ATAs, maps router accounts
+ * cleanly with zero outer signers (Audren signs via `invoke_signed`), and prints synced `JUPITER_CPI_EXCLUDED_DEXES`.
  *
  * Run (from `typescript/`):
  *   pnpm swap-plan                  # offline escrow-account planning
- *   LIVE_QUOTE=1 pnpm swap-plan     # live Mainnet route via AudrenRelayClient (or AGGREGATOR_API)
+ *   LIVE_QUOTE=1 pnpm swap-plan     # live Mainnet route via AudrenRelayClient
  */
 
 import assert from 'node:assert/strict';
-
 import {
   AUDREN_DEFAULT_RELAY_URL,
   AUDREN_PROGRAM_ID,
@@ -21,99 +17,58 @@ import {
   CLASSIC_TOKEN_PROGRAM_ID,
   JUPITER_CPI_EXCLUDED_DEXES,
   WSOL_MINT,
-  deriveAssociatedTokenAddress,
-  deriveEscrowPda,
-  fetchAggregatorPrivateSwapRoute,
+  deriveAssociatedTokenAddressSync,
+  deriveEscrowPdaSync,
   prepareEscrowAccounts,
 } from '@audren/sdk';
 
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-// Derive canonical Pool #0 swap_escrow shard 0 PDA & Classic SPL ATAs via @audren/sdk
-const { address: escrowShard0 } = await deriveEscrowPda(0, 0);
-const { address: escrowUsdcAta } = await deriveAssociatedTokenAddress(
+const { address: escrowShard0 } = deriveEscrowPdaSync(0, 0);
+const { address: escrowUsdcAta } = deriveAssociatedTokenAddressSync(
   escrowShard0,
   USDC_MINT,
   CLASSIC_TOKEN_PROGRAM_ID,
 );
-const { address: escrowWsolAta } = await deriveAssociatedTokenAddress(
+const { address: escrowWsolAta } = deriveAssociatedTokenAddressSync(
   escrowShard0,
   WSOL_MINT,
   CLASSIC_TOKEN_PROGRAM_ID,
 );
 
 if (process.env.LIVE_QUOTE === '1') {
-  let provider = 'jupiter';
-  let inAmount;
-  let outAmount;
-  let routerProgramId;
-  let routerAccounts;
-
-  if (process.env.AGGREGATOR_API) {
-    // Direct Jupiter-compatible aggregator API via @audren/sdk's fetchAggregatorPrivateSwapRoute
-    const { quote, swap } = await fetchAggregatorPrivateSwapRoute(
-      process.env.AGGREGATOR_API,
-      {
-        inputMint: USDC_MINT,
-        outputMint: WSOL_MINT,
-        amount: '10000000', // 10 USDC
-        slippageBps: 50,
-        maxAccounts: 28,
-      },
-      escrowShard0,
-    );
-    inAmount = String(quote.inAmount);
-    outAmount = String(quote.outAmount);
-    routerProgramId = swap.swapInstruction.programId;
-    routerAccounts = swap.swapInstruction.accounts;
-  } else {
-    // Default stateless Audren Privacy Relayer (relay.audren.xyz) via @audren/sdk's AudrenRelayClient
-    const relay = new AudrenRelayClient(process.env.AUDREN_RELAY_URL ?? AUDREN_DEFAULT_RELAY_URL);
-    const quoteRes = await relay.quoteSwap({
-      inputMint: USDC_MINT,
-      outputMint: WSOL_MINT,
-      amount: '10000000', // 10 USDC
-      slippageBps: 50,
-      cluster: 'mainnet',
-      shardId: 0,
-      maxAccounts: 28,
-    });
-    const quoteObj = quoteRes.quote ?? quoteRes;
-    provider = String(quoteRes.provider ?? quoteObj.provider ?? 'jupiter');
-    inAmount = String(quoteObj.inAmount);
-    outAmount = String(quoteObj.outAmount);
-    const swapRes = await relay.buildSwapInstructions({
-      provider,
-      quoteResponse: quoteObj.rawQuote ?? quoteObj,
-      inputMint: USDC_MINT,
-      outputMint: WSOL_MINT,
-      cluster: 'mainnet',
-      shardId: 0,
-    });
-    routerProgramId = swapRes.swapInstruction.programId;
-    routerAccounts = swapRes.swapInstruction.accounts;
-  }
-
+  const relay = new AudrenRelayClient(process.env.AUDREN_RELAY_URL ?? AUDREN_DEFAULT_RELAY_URL);
+  const quoteRes = await relay.quoteSwap({
+    inputMint: USDC_MINT,
+    outputMint: WSOL_MINT,
+    amount: '10000000',
+    slippageBps: 50,
+    cluster: 'mainnet',
+    shardId: 0,
+    maxAccounts: 28,
+  });
+  const quoteObj = quoteRes.quote ?? quoteRes;
+  const provider = String(quoteRes.provider ?? quoteObj.provider ?? 'jupiter');
+  const swapRes = await relay.buildSwapInstructions({
+    provider,
+    quoteResponse: quoteObj.rawQuote ?? quoteObj,
+    inputMint: USDC_MINT,
+    outputMint: WSOL_MINT,
+    cluster: 'mainnet',
+    shardId: 0,
+  });
   const prepared = await prepareEscrowAccounts({
     poolId: 0,
     shardId: 0,
     inputMint: USDC_MINT,
     outputMint: WSOL_MINT,
-    actionAccounts: routerAccounts,
+    actionAccounts: swapRes.swapInstruction.accounts,
   });
   const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
-  assert.equal(outerSigners, 0, 'swap_escrow external signer flag must be stripped for Audren CPI');
-
-  console.log('Live PDA-CPI-compatible private swap route verified via @audren/sdk:');
-  console.log({
+  assert.equal(outerSigners, 0);
+  console.log('Live ExecViaEscrow route verified via @audren/sdk:', {
     provider,
-    routerProgramId,
     escrowPda: prepared.escrowPda,
-    inAmount,
-    outAmount,
-    escrowIdx: prepared.escrowIdx,
-    escrowInIdx: prepared.escrowInIdx,
-    escrowOutIdx: prepared.escrowOutIdx,
     outerRouterAccountCount: prepared.accounts.length,
     outerSigners,
     excludedDexesCount: JUPITER_CPI_EXCLUDED_DEXES.length,
@@ -127,7 +82,6 @@ if (process.env.LIVE_QUOTE === '1') {
     { pubkey: escrowWsolAta, isSigner: false, isWritable: true },
     { pubkey: 'AMMVaultWsol1111111111111111111111111111111', isSigner: false, isWritable: true },
   ];
-
   const prepared = await prepareEscrowAccounts({
     poolId: 0,
     shardId: 0,
@@ -137,8 +91,7 @@ if (process.env.LIVE_QUOTE === '1') {
   });
   const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
   assert.equal(outerSigners, 0);
-
-  console.log('Offline ExecViaEscrow account mapping via @audren/sdk (no transaction submitted)');
+  console.log('Offline ExecViaEscrow (Tag 7) account mapping via @audren/sdk:');
   console.log({
     audrenProgramId: AUDREN_PROGRAM_ID,
     escrowPda: prepared.escrowPda,

@@ -1,17 +1,17 @@
 [package]
 name = "audren-example-shielded-transfer"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-audren-client = { git = "https://github.com/audren-xyz/audren.git", rev = "65557794bb35282775338055d3993e16436dba4b" }
-audren-core = { git = "https://github.com/audren-xyz/audren.git", rev = "65557794bb35282775338055d3993e16436dba4b" }
-base64 = "0.22"
+audren-client = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
+audren-core = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
+base64 = "0.22.1"
 bs58 = "0.5"
 rand = "0.8.5"
 serde_json = "1"
-solana-address = { version = "~2.7.0", features = ["curve25519"] }
+solana-address = { version = "~2.7.0", features = ["curve25519", "std"] }
 solana-instruction = "3.5.0"
 solana-keypair = "3.1.2"
 solana-message = "4.5.0"

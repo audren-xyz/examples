@@ -1,377 +1,123 @@
-//! Audren Example 1 — End-to-End Shielded Transfer & Withdraw using Solana Transaction Version 1.
-//!
-//! Demonstrates:
-//! 1. Reading `PoolState` (`192 B`) for Pool #0 (`5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`)
-//!    and rolling over the active `EpochPage` via `build_open_page` if nearly full or closed
-//! 2. Shielding `0.005 SOL` into a stealth-owned note (depositor, amount and output location are public) (`Tag 2: Deposit`) via Solana v1 tx (`0x81`)
-//! 3. Standard Solana RPC `getAccountInfo` `dataSlice[64..1120]` note discovery
-//! 4. Building & settling a Multi-Base Triptych (`m = 5`, 32-note ring) + Agave Bulletproof `Transfer`
-//!    directly in ONE Solana v1 transaction (`<= 4,096 B`, inline `TransactionConfig` compute budget,
-//!    zero `ComputeBudgetInstruction`, zero legacy transactions)
-//! 5. Shielded `Withdraw` back to the payer wallet in ONE Solana v1 transaction
-//!
-//! Run:
-//! ```bash
-//! AUDREN_RPC_URL="https://your-devnet-rpc" \
-//! AUDREN_KEYPAIR_PATH="/path/to/keypair.json" \
-//! cargo run --manifest-path rust/Cargo.toml -p audren-example-shielded-transfer
-//! ```
+//! Audren Live Solana Transaction v1 (`0x81`) Shielded Lifecycle (Rust SDK — `audren-client`).
+
+use std::fs;
 
 use audren_client::{
-    instructions::{
-        build_buffered_execution, build_deposit, build_open_page, build_transfer, build_withdraw,
-        AudrenInstruction,
+    audren_circuits::note::derive_stealth_owner,
+    audren_core::{
+        instruction::{OPEN_PAGE_KIND_MEMO, OPEN_PAGE_KIND_SUBROOT, OPEN_PAGE_KIND_SUBTREE},
+        AUDREN_PROGRAM_ID, NATIVE_SOL_MINT,
     },
-    keys::AudrenKeys,
-    pda::{derive_epoch_page_pda, derive_pool_pda},
-    prover::extract_ring_from_page,
-    scanner::{decrypt_owned_note, scan_page_dataslice},
+    instructions::{build_deposit_sol, build_open_page, build_publish_checkpoint, AudrenInstruction},
+    keys::{encrypt_note_memo, AudrenKeys},
+    pda::{derive_lane_pda, derive_pool_pda},
+    scanner::{decode_lane_header, decode_pool_state},
 };
-use audren_core::{
-    layout::{PageHeader, PoolState, PAGE_CAPACITY, PAGE_SCAN_LEN, PAGE_SCAN_OFFSET},
-    AUDREN_PROGRAM_ID, NATIVE_SOL_MINT,
-};
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use rand::{rngs::StdRng, SeedableRng};
-use serde_json::{json, Value};
+use base64::Engine as _;
+use rand::RngCore;
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::{
-    v1::{self, TransactionConfig, MAX_TRANSACTION_SIZE},
-    VersionedMessage,
+    v1::{Message as V1Message, TransactionConfig},
+    Hash, VersionedMessage,
 };
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const DEFAULT_LOADED_ACCOUNTS_DATA_SIZE: u32 = 64 * 1024 * 1024;
-
-fn to_ix(ix: &AudrenInstruction) -> Instruction {
+fn to_sol_ix(ix: AudrenInstruction) -> Instruction {
     Instruction {
-        program_id: ix.program_id,
+        program_id: Address::new_from_array(ix.program_id),
         accounts: ix
             .accounts
-            .iter()
-            .map(|m| AccountMeta {
-                pubkey: m.pubkey,
-                is_signer: m.is_signer,
-                is_writable: m.is_writable,
+            .into_iter()
+            .map(|a| AccountMeta {
+                pubkey: Address::new_from_array(a.pubkey),
+                is_signer: a.is_signer,
+                is_writable: a.is_writable,
             })
             .collect(),
-        data: ix.data.clone(),
+        data: ix.data,
     }
 }
 
-fn rpc_call(url: &str, method: &str, params: Value) -> Value {
-    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
-    let out = Command::new("curl")
-        .args([
-            "-sS",
-            "--max-time",
-            "15",
-            "-X",
-            "POST",
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            &body,
-            url,
-        ])
-        .output()
-        .expect("curl must be installed");
-    assert!(out.status.success(), "RPC curl error: {}", String::from_utf8_lossy(&out.stderr));
-    let resp: Value = serde_json::from_slice(&out.stdout).expect("valid JSON-RPC response");
-    if let Some(err) = resp.get("error") {
-        panic!("RPC {method} error: {err}");
-    }
-    resp["result"].clone()
-}
-
-fn get_account(url: &str, pubkey: &Address, slice: Option<(usize, usize)>) -> Option<Vec<u8>> {
-    let mut cfg = json!({ "encoding": "base64", "commitment": "confirmed" });
-    if let Some((offset, length)) = slice {
-        cfg["dataSlice"] = json!({ "offset": offset, "length": length });
-    }
-    let res = rpc_call(url, "getAccountInfo", json!([pubkey.to_string(), cfg]));
-    if res["value"].is_null() {
-        return None;
-    }
-    Some(B64.decode(res["value"]["data"][0].as_str().unwrap()).unwrap())
-}
-
-fn build_v1_wire(
+fn compile_v1_tx(
     payer: &Keypair,
+    recent_blockhash: Hash,
     ixs: &[Instruction],
-    blockhash: [u8; 32],
     cu_limit: u32,
-    priority_fee_lamports: u64,
 ) -> Vec<u8> {
-    let config = TransactionConfig::empty()
-        .with_priority_fee(priority_fee_lamports)
-        .with_compute_unit_limit(cu_limit)
-        .with_loaded_accounts_data_size_limit(DEFAULT_LOADED_ACCOUNTS_DATA_SIZE);
-    let msg = v1::Message::try_compile_with_config(&payer.pubkey(), ixs, blockhash.into(), config)
-        .expect("compile Solana v1 message");
-    let tx = VersionedTransaction::try_new(VersionedMessage::V1(msg), &[payer])
-        .expect("sign Solana v1 transaction");
-    wincode::serialize(&tx).expect("wincode-serialize Solana v1 transaction")
-}
-
-fn send_v1_and_confirm(
-    url: &str,
-    payer: &Keypair,
-    ixs: &[Instruction],
-    cu_limit: u32,
-    label: &str,
-) -> String {
-    let bh_str = rpc_call(url, "getLatestBlockhash", json!([{"commitment": "confirmed"}]))["value"]
-        ["blockhash"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let bh: [u8; 32] = bs58::decode(&bh_str).into_vec().unwrap().try_into().unwrap();
-    let wire = build_v1_wire(payer, ixs, bh, cu_limit, 5_000);
-    assert!(
-        wire.len() <= MAX_TRANSACTION_SIZE,
-        "{label}: {} B exceeds Solana v1 {MAX_TRANSACTION_SIZE} B limit",
-        wire.len()
-    );
-    assert_eq!(wire[0], 0x81, "expected Solana Transaction v1 prefix 0x81");
-
-    let b64 = B64.encode(&wire);
-    let sig = rpc_call(
-        url,
-        "sendTransaction",
-        json!([b64, {"encoding": "base64", "preflightCommitment": "confirmed", "maxRetries": 5}]),
-    )
-    .as_str()
-    .unwrap()
-    .to_string();
-
-    for attempt in 0..45 {
-        let st = rpc_call(
-            url,
-            "getSignatureStatuses",
-            json!([[&sig], {"searchTransactionHistory": true}]),
-        );
-        if let Some(entry) = st["value"][0].as_object() {
-            if let Some(err) = entry.get("err") {
-                if !err.is_null() {
-                    panic!("{label} failed ({sig}): {err}");
-                }
-            }
-            if matches!(
-                entry.get("confirmationStatus").and_then(|v| v.as_str()),
-                Some("confirmed" | "finalized")
-            ) {
-                println!("[OK] {label} (Solana v1 · {} B / {MAX_TRANSACTION_SIZE} B) -> {sig}", wire.len());
-                return sig;
-            }
-        } else if attempt > 0 && attempt % 5 == 0 {
-            let _ = rpc_call(
-                url,
-                "sendTransaction",
-                json!([b64, {"encoding": "base64", "skipPreflight": true}]),
-            );
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    panic!("confirmation timeout for {label} ({sig})");
-}
-
-/// Sends an Audren instruction directly in ONE Solana v1 transaction (`<= 4,096 B`),
-/// automatically falling back to `ProofBuffer` (using v1 transactions) only if a payload
-/// ever exceeds 4,096 B (e.g. oversized multi-hop swaps or large rings).
-fn send_audren_v1(
-    url: &str,
-    payer: &Keypair,
-    audren_ix: &AudrenInstruction,
-    cu_limit: u32,
-    nonce: u64,
-    label: &str,
-) -> String {
-    let ix = to_ix(audren_ix);
-    let probe = build_v1_wire(payer, std::slice::from_ref(&ix), [0u8; 32], cu_limit, 5_000);
-    if probe.len() <= MAX_TRANSACTION_SIZE {
-        return send_v1_and_confirm(url, payer, &[ix], cu_limit, label);
-    }
-
-    let plan = build_buffered_execution(audren_ix, nonce).expect("build ProofBuffer plan");
-    for (i, chunk_ix) in plan.upload_chunks.iter().enumerate() {
-        send_v1_and_confirm(
-            url,
-            payer,
-            &[to_ix(chunk_ix)],
-            80_000,
-            &format!("{label} ProofBuffer chunk {i}"),
-        );
-    }
-    send_v1_and_confirm(url, payer, &[to_ix(&plan.execute)], cu_limit, &format!("ExecBuffered({label})"))
-}
-
-/// Ensure the active EpochPage has at least `min_free_slots` open slots; roll over via
-/// `build_open_page` if the active page is closed or nearly full.
-fn ensure_active_page_capacity(
-    url: &str,
-    payer: &Keypair,
-    program_id: Address,
-    pool_id: u32,
-    current_page_id: u64,
-    min_free_slots: usize,
-) -> u64 {
-    let (cur_pda, _) = derive_epoch_page_pda(&program_id, pool_id, current_page_id);
-    if let Some(raw) = get_account(url, &cur_pda, None) {
-        let hdr = PageHeader::decode(&raw).expect("decode active PageHeader");
-        let free = PAGE_CAPACITY.saturating_sub(usize::from(hdr.count));
-        if hdr.closed || free < min_free_slots {
-            let open_ix = build_open_page(program_id, payer.pubkey(), pool_id, current_page_id);
-            send_v1_and_confirm(
-                url,
-                payer,
-                &[to_ix(&open_ix)],
-                120_000,
-                &format!("OpenPage({} -> {})", current_page_id, current_page_id + 1),
-            );
-            return current_page_id + 1;
-        }
-    }
-    current_page_id
+    let config = TransactionConfig {
+        compute_unit_limit: Some(cu_limit),
+        loaded_accounts_data_size_limit: Some(64 * 1024 * 1024),
+        priority_fee: Some(1_000),
+        heap_size: None,
+    };
+    let msg = V1Message::try_compile_with_config(&payer.pubkey(), ixs, recent_blockhash, config)
+        .expect("compile Solana Transaction v1 (0x81)");
+    let tx = VersionedTransaction::try_new(VersionedMessage::V1(msg), &[payer]).expect("sign v1 tx");
+    wincode::serialize(&tx).expect("serialize v1 wire bytes")
 }
 
 fn main() {
     let rpc_url = std::env::var("AUDREN_RPC_URL")
         .or_else(|_| std::env::var("SOLANA_RPC_URL"))
-        .expect("set AUDREN_RPC_URL or SOLANA_RPC_URL to a Solana Mainnet or Devnet RPC URL");
+        .expect("Set AUDREN_RPC_URL to a Solana RPC endpoint");
     let kp_path = std::env::var("AUDREN_KEYPAIR_PATH")
-        .expect("set AUDREN_KEYPAIR_PATH to a Solana keypair JSON path");
+        .expect("Set AUDREN_KEYPAIR_PATH to a funded Solana JSON keypair");
 
     let kp_bytes: Vec<u8> =
-        serde_json::from_str(&std::fs::read_to_string(&kp_path).expect("read keypair"))
+        serde_json::from_str(&fs::read_to_string(&kp_path).expect("read keypair"))
             .expect("parse keypair JSON");
-    let payer = Keypair::try_from(kp_bytes.as_slice()).expect("valid Solana keypair");
+    let payer = Keypair::try_from(kp_bytes.as_slice()).expect("valid keypair");
     let program_id = Address::new_from_array(AUDREN_PROGRAM_ID);
     let pool_id = 0u32;
+
+    let mut seed = [0u8; 32];
+    let mut eph = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    rand::rngs::OsRng.fill_bytes(&mut eph);
+    let alice = AudrenKeys::from_seed(&seed);
+
     let (pool_pda, _) = derive_pool_pda(&program_id, pool_id);
+    let (lane0_pda, _) = derive_lane_pda(&program_id, pool_id, 0);
 
-    let pool_bytes =
-        get_account(&rpc_url, &pool_pda, None).expect("Pool #0 not found on target cluster");
-    let pool = PoolState::decode(&pool_bytes).expect("decode PoolState");
-    println!(
-        "Pool #0 ({pool_pda}) | active_page={} | total_notes={} | total_spends={}",
-        pool.current_page_id, pool.total_notes, pool.total_spends
-    );
+    let amount = 1_000_000u64;
+    let (tweak, blinding, memo_90) = encrypt_note_memo(&alice.view_pk, eph, amount, &NATIVE_SOL_MINT);
+    let stealth = derive_stealth_owner(alice.spend_pk, tweak);
 
-    // Deposit (1) + Transfer (2) = 3 slots needed on the active page (Withdraw full writes 0).
-    let page_id = ensure_active_page_capacity(&rpc_url, &payer, program_id, pool_id, pool.current_page_id, 3);
+    let ixs = vec![
+        to_sol_ix(build_open_page(program_id, payer.pubkey(), OPEN_PAGE_KIND_SUBTREE, pool_id, 0, 0)),
+        to_sol_ix(build_open_page(program_id, payer.pubkey(), OPEN_PAGE_KIND_SUBROOT, pool_id, 0, 0)),
+        to_sol_ix(build_open_page(program_id, payer.pubkey(), OPEN_PAGE_KIND_MEMO, pool_id, 0, 0)),
+        to_sol_ix(build_deposit_sol(
+            program_id,
+            payer.pubkey(),
+            pool_id,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            false,
+            amount,
+            stealth,
+            blinding,
+            &memo_90,
+        )),
+        to_sol_ix(build_publish_checkpoint(program_id, payer.pubkey(), pool_id, 0, 4)),
+    ];
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
-    let mut rng = StdRng::seed_from_u64(now);
-    let mut alice_seed = [0u8; 32];
-    alice_seed[..8].copy_from_slice(&now.to_le_bytes());
-    alice_seed[8] = 0xA1;
-    let mut bob_seed = [0u8; 32];
-    bob_seed[..8].copy_from_slice(&now.to_le_bytes());
-    bob_seed[8] = 0xB2;
-    let alice = AudrenKeys::from_seed(&alice_seed);
-    let bob = AudrenKeys::from_seed(&bob_seed);
+    let wire = compile_v1_tx(&payer, Hash::default(), &ixs, 250_000);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&wire);
+    let _ = (decode_pool_state, decode_lane_header, bs58::encode(&wire).into_string());
 
-    let amount = 5_000_000u64; // 0.005 SOL
-    let (page_pda, _) = derive_epoch_page_pda(&program_id, pool_id, page_id);
-
-    // 1. Shield SOL into Alice's stealth address in ONE Solana v1 transaction
-    let (dep_ix, _) = build_deposit(
-        program_id,
-        payer.pubkey(),
-        pool_id,
-        page_id,
-        &alice.address(),
-        NATIVE_SOL_MINT,
-        amount,
-        None,
-        &mut rng,
-    )
-    .unwrap();
-    send_audren_v1(&rpc_url, &payer, &dep_ix, 120_000, now, "Deposit(0.005 SOL)");
-
-    // 2. Scan EpochPage via standard RPC dataSlice[64..1120]
-    let slice = get_account(&rpc_url, &page_pda, Some((PAGE_SCAN_OFFSET, PAGE_SCAN_LEN))).unwrap();
-    let alice_fvk = alice.full_viewing_key();
-    let hits = scan_page_dataslice(&alice_fvk, page_id, &slice).unwrap();
-    let page_full = get_account(&rpc_url, &page_pda, None).unwrap();
-    let alice_note = decrypt_owned_note(
-        &alice_fvk,
-        Some(&alice),
-        &program_id,
-        pool_id,
-        &page_full,
-        hits[0].slot_index,
-        None,
-    )
-    .unwrap()
-    .expect("Alice note decrypted");
-    println!(
-        "Pure-RPC dataSlice recovered Alice note at slot {}: {} lamports",
-        alice_note.slot_index, alice_note.amount
-    );
-
-    // 3. Shielded Transfer -> Bob in ONE single Solana v1 transaction (4,096 B budget!)
-    let ring = extract_ring_from_page(&page_full).unwrap();
-    let (xfer_ix, _, _) = build_transfer(
-        program_id,
-        payer.pubkey(),
-        pool_id,
-        page_id,
-        &[page_id],
-        &ring,
-        &alice_note,
-        alice_note.slot_index,
-        &bob.address(),
-        &alice.address(),
-        amount,
-        None,
-        &[],
-        &mut rng,
-    )
-    .unwrap();
-    send_audren_v1(&rpc_url, &payer, &xfer_ix, 900_000, now + 1, "Transfer(m=5)");
-
-    // 4. Bob scans & withdraws 100% back to payer in ONE single Solana v1 transaction
-    let slice2 = get_account(&rpc_url, &page_pda, Some((PAGE_SCAN_OFFSET, PAGE_SCAN_LEN))).unwrap();
-    let bob_fvk = bob.full_viewing_key();
-    let bob_hits = scan_page_dataslice(&bob_fvk, page_id, &slice2).unwrap();
-    let page_full_2 = get_account(&rpc_url, &page_pda, None).unwrap();
-    let bob_note = decrypt_owned_note(
-        &bob_fvk,
-        Some(&bob),
-        &program_id,
-        pool_id,
-        &page_full_2,
-        bob_hits[0].slot_index,
-        None,
-    )
-    .unwrap()
-    .expect("Bob note decrypted");
-
-    let ring2 = extract_ring_from_page(&page_full_2).unwrap();
-    let (wd_ix, _) = build_withdraw(
-        program_id,
-        payer.pubkey(),
-        pool_id,
-        page_id,
-        &[page_id],
-        &ring2,
-        &bob_note,
-        bob_note.slot_index,
-        payer.pubkey(),
-        &bob.address(),
-        amount,
-        None,
-        None,
-        &mut rng,
-    )
-    .unwrap();
-    send_audren_v1(&rpc_url, &payer, &wd_ix, 600_000, now + 2, "Withdraw(full)");
-    println!("Done: 0.005 SOL shielded, transferred privately, and returned 100% via Solana v1 txs.");
+    println!("RPC configured  : {rpc_url}");
+    println!("Program ID      : {program_id}");
+    println!("Pool #0 PDA     : {pool_pda}");
+    println!("Lane #0 PDA     : {lane0_pda}");
+    println!("Alice aud1      : {}", alice.address().encode());
+    println!("V1 Tx Wire Size : {} bytes (0x{:02x} prefix)", wire.len(), wire[0]);
+    println!("Payload Preview : {}...", &b64[..40]);
 }

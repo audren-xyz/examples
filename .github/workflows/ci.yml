@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   rust-ts-kotlin-parity:
-    name: Rust, TypeScript & Kotlin Examples (+ Cross-SDK Parity)
+    name: Rust, TypeScript (WASM) & Kotlin Examples (+ Cross-SDK Parity)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,12 +30,12 @@ jobs:
           workspaces: |
             examples/rust -> target
             audren -> target
-      - name: Check & run Rust examples (quickstart & institutional-audit)
+      - name: Check & run Rust V2 examples (quickstart & institutional-audit)
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
           cargo check --manifest-path examples/rust/Cargo.toml --all-targets
-          cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
+          cargo run --release --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
           cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-institutional-audit
       - uses: pnpm/action-setup@v6
         with:
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Build @audren/sdk and run TypeScript examples
+      - name: Build @audren/sdk and run TypeScript V2 examples (including WASM Groth16 prover)
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
@@ -63,7 +63,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.7.1'
-      - name: Run Kotlin (Android/JVM) quickstart
+      - name: Run Kotlin (Android/JVM) V2 quickstart
         working-directory: examples/kotlin/quickstart
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
@@ -75,7 +75,7 @@ jobs:
           echo "100% byte-for-byte canonical stdout parity verified: Rust == TypeScript == Kotlin"
 
   swift-parity:
-    name: Swift (iOS/macOS) Example (+ Rust Parity)
+    name: Swift (iOS/macOS) V2 Example (+ Rust Parity)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -98,7 +98,7 @@ jobs:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
           (cd audren && cargo build -p audren-ffi --release)
-          cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
+          cargo run --release --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
           (cd examples/swift/quickstart && swift run -q 2>/dev/null || swift run) > /tmp/out-swift-raw.txt
           sed -n '/^\[1\/6 KEYS\]/,$p' /tmp/out-swift-raw.txt | tee /tmp/out-swift.txt
           diff -u /tmp/out-rust.txt /tmp/out-swift.txt

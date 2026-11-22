@@ -1,13 +1,8 @@
 /**
- * Audren Canonical 6-Building-Block Quickstart (TypeScript SDK — `@audren/sdk` + `@audren/sdk/prover`).
+ * Audren Canonical 6-Building-Block Quickstart (TypeScript SDK — `@audren/sdk` + `@audren/sdk/prover` WASM).
  *
- * Runs completely offline (zero RPC required) and executes the exact same 6 building blocks
- * mirrored across Rust, TypeScript, Swift (iOS), and Kotlin (Android) against the shared
- * canonical `spec/test-vectors.json` conformance page — producing 100% byte-for-byte identical
- * stdout across all 4 official SDKs.
- *
- * Run (from `typescript/`):
- *   pnpm install && pnpm quickstart
+ * Runs completely offline (zero RPC required) against `spec/test-vectors.json` and emits
+ * 100% byte-for-byte identical canonical stdout across Rust, TypeScript, Swift, and Kotlin.
  */
 
 import assert from 'node:assert/strict';
@@ -15,198 +10,321 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
+  ASSET_MODE_PRIVATE,
+  ASSET_MODE_SPL,
   AUDREN_DEFAULT_RELAY_URL,
   AUDREN_PROGRAM_ID,
   CLASSIC_TOKEN_PROGRAM_ID,
+  CompactWalletStore,
   JUPITER_CPI_EXCLUDED_DEXES,
-  PAGE_CAPACITY,
-  PAGE_SCAN_DATA_SLICE,
+  NATIVE_SOL_MINT_BYTES,
+  NUM_LANES,
+  PROTOCOL_VERSION,
+  SYSTEM_PROGRAM_ID,
   WSOL_MINT,
+  ZERO_HASHES_4ARY,
   base58Decode,
-  decodePageHeader,
+  base58Encode,
+  buildDepositSolInstruction,
+  buildHistoricalWitness4Ary,
+  buildJoinsplitInstruction,
+  computeExecCtxHash,
+  computeJoinsplitCtxHash,
+  computeSubtree256Root,
+  computeSuperRoot4Ary,
+  decodeAudrenAddress,
   decodePoolState,
-  deriveAssociatedTokenAddress,
-  deriveEpochPagePda,
-  deriveEscrowPda,
-  derivePoolPda,
-  deriveSolVaultPda,
-  deriveUnwrapPda,
-  parseAudrenAddress,
-  prepareEscrowAccounts,
+  decodeRootCheckpoint,
+  deriveAssetId,
+  deriveAssociatedTokenAddressSync,
+  deriveDefiSessionKeypair,
+  deriveEscrowPdaSync,
+  deriveKeysFromSeed,
+  deriveLanePdaSync,
+  deriveNullifierPdaSync,
+  derivePoolPdaSync,
+  deriveSolVaultPdaSync,
+  deriveStealthOwner,
+  deriveSubaccountKeys,
+  deriveUnwrapPdaSync,
+  deriveVaultAuthPdaSync,
+  encryptNoteMemo,
+  exportFullViewingKey,
+  frFromBeBytesStrict,
+  frToBeBytes,
+  poseidon4,
+  prepareDynamicSwapMemo,
+  tryDecryptAndVerifyMemo90,
+  verifySelectiveDisclosureProof,
 } from '@audren/sdk';
 import {
-  NATIVE_SOL_MINT,
-  auditorDecryptNote,
-  buildBufferedExecutionPlan,
-  buildCloseProofBufferInstruction,
-  buildDepositInstruction,
-  buildTransferInstruction,
-  buildWithdrawInstruction,
-  createSelectiveDisclosureProof,
-  deriveAuditorKeypair,
-  deriveDefiSessionKeypair,
-  deriveKeysFromSeed,
-  deriveSubaccountKeys,
-  exportFullViewingKey,
-  extractRingFromPage,
-  fromHex,
-  scanEpochPage,
-  scanEpochPageSpendable,
-  scanPageScanSlice,
-  toHex,
-  verifySelectiveDisclosureOnPage,
-  verifySelectiveDisclosureReceipt,
+  AudrenWasmProver,
+  dummyInputWitness,
+  dummyOutputWitness,
 } from '@audren/sdk/prover';
 
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const audrenRepo = process.env.AUDREN_REPO_DIR ?? resolve(import.meta.dirname, '../../../audren');
-const vectors = JSON.parse(readFileSync(resolve(audrenRepo, 'spec/test-vectors.json'), 'utf8'));
+const toHex = (b) => Buffer.from(b).toString('hex');
+const fromHex = (h) => new Uint8Array(Buffer.from(h, 'hex'));
 
-// 1. KEYS — Master keys, sub-account #1, DeFi Session B_0, aud1… address & read-only Full Viewing Key
-const aliceSeed = fromHex(vectors.alice.seed_hex);
-const alice = await deriveKeysFromSeed(aliceSeed);
-const aliceSub1 = await deriveSubaccountKeys(aliceSeed, 1);
-const aliceSession0 = await deriveDefiSessionKeypair(aliceSeed, 0);
-const aliceFvk = exportFullViewingKey(alice);
-const parsed = parseAudrenAddress(alice.address);
-assert.equal(toHex(parsed.spendPk), vectors.alice.spend_pk_hex);
+const audrenRepo = process.env.AUDREN_REPO_DIR ?? resolve(import.meta.dirname, '../../../audren');
+const v = JSON.parse(readFileSync(resolve(audrenRepo, 'spec/test-vectors.json'), 'utf8'));
+const poolId = 0;
+
+// 1. KEYS & COMPLIANCE
+const aliceSeed = fromHex(v.alice.seed_hex);
+const bobSeed = fromHex(v.bob.seed_hex);
+const alice = deriveKeysFromSeed(aliceSeed);
+const aliceSub1 = deriveSubaccountKeys(aliceSeed, 1);
+const bob = deriveKeysFromSeed(bobSeed);
+const sess0 = deriveDefiSessionKeypair(aliceSeed, 0);
+const sess3 = deriveDefiSessionKeypair(aliceSeed, 3);
+const fvk = exportFullViewingKey(alice);
+const parsed = decodeAudrenAddress(alice.address);
+assert.equal(toHex(parsed.spendPk), v.alice.spend_pk_hex);
 
 console.log('[1/6 KEYS]');
-console.log(`  Program ID    : ${AUDREN_PROGRAM_ID}`);
+console.log(`  Program ID    : ${AUDREN_PROGRAM_ID} (v${PROTOCOL_VERSION})`);
 console.log(`  Alice aud1    : ${alice.address}`);
 console.log(`  Subaccount #1 : ${aliceSub1.address}`);
-console.log(`  DeFi Session 0: ${aliceSession0.address}`);
-console.log(`  FVK view_pk   : ${aliceFvk.viewPkB58}`);
+console.log(`  DeFi Session 0: ${sess0.pubkeyBase58}`);
+console.log(`  FVK nk        : ${toHex(fvk.nk)}`);
 
-// 2. PDAs & LAYOUTS — Canonical Pool #0 PDAs & binary decoders
-const poolPda = await derivePoolPda(0);
-const page0Pda = await deriveEpochPagePda(0, 0n);
-const solVaultPda = await deriveSolVaultPda(0);
-const escrow0Pda = await deriveEscrowPda(0, 0);
-const poolState = decodePoolState(fromHex(vectors.pool_state.raw_hex));
-const pageBytes = fromHex(vectors.epoch_page.page_hex);
-const hdr = decodePageHeader(pageBytes);
+// 2. PDAs & ZERO-COPY LAYOUTS
+const poolPda = derivePoolPdaSync(poolId).address;
+const solVaultPda = deriveSolVaultPdaSync(poolId).address;
+const vaultAuthPda = deriveVaultAuthPdaSync(poolId).address;
+const lane2Pda = deriveLanePdaSync(poolId, 2).address;
+const escrow5Pda = deriveEscrowPdaSync(poolId, 5).address;
+const poolState = decodePoolState(fromHex(v.pool_state.raw_hex));
+const ckpt = decodeRootCheckpoint(fromHex(v.checkpoint_raw_hex));
 
 console.log('[2/6 PDAs & LAYOUTS]');
-console.log(`  Pool #0 PDA   : ${poolPda.address} (total_notes=${poolState.totalNotes})`);
-console.log(`  EpochPage #0  : ${page0Pda.address} (count=${hdr.count}/${PAGE_CAPACITY})`);
-console.log(`  SOL Vault     : ${solVaultPda.address}`);
-console.log(`  Escrow #0     : ${escrow0Pda.address}`);
-
-// 3. SCANNER — 1,056-byte dataSlice[64..1120] view-tag filter, read-only FVK & spendable decrypt
-const slice = fromHex(vectors.epoch_page.scan_slice_hex);
-const hits = await scanPageScanSlice(aliceFvk, slice);
-assert.deepEqual(hits, [5]);
-
-const [watchOnly] = await scanEpochPage(aliceFvk, pageBytes, 0);
-assert.equal(watchOnly.nullifierPdaB58, undefined);
-const [note] = await scanEpochPageSpendable(alice, pageBytes, 0);
-const unwrapPda = await deriveUnwrapPda(0, note.nullifier);
-
-console.log('[3/6 SCANNER]');
-console.log(`  dataSlice     : offset=${PAGE_SCAN_DATA_SLICE.offset}, length=${PAGE_SCAN_DATA_SLICE.length} B -> matched slot ${hits[0]}`);
-console.log(`  Read-only FVK : ${watchOnly.amount} lamports | NullifierPDA=none`);
-console.log(`  Spendable note: ${note.amount} lamports | NullifierPDA=${note.nullifierPdaB58}`);
-console.log(`  Unwrap PDA    : ${unwrapPda.address}`);
-
-// 4. PROVER — Pure-TS Deposit, Transfer (m=5 Triptych + Bulletproofs U128), ProofBuffer, CloseProofBuffer & Withdraw
-const payer = base58Decode(vectors.pdas.proof_buffer_authority);
-const bobAddr = vectors.bob.address;
-const ring = extractRingFromPage(pageBytes);
-
-const { instructions: [depIx] } = await buildDepositInstruction({
-  depositor: payer,
-  poolId: 0,
-  activePageId: 1n,
-  recipient: bobAddr,
-  mint: NATIVE_SOL_MINT,
-  amount: 500_000n,
-});
-const { instruction: xferIx } = await buildTransferInstruction({
-  payer,
-  poolId: 0,
-  outPageId: 1n,
-  inputPageIds: [0n],
-  ring,
-  inputNote: note,
-  secretIndex: note.slotIndex,
-  recipient: bobAddr,
-  changeAddr: alice.address,
-  payAmount: 900_000n,
-});
-const bufPlan = await buildBufferedExecutionPlan(xferIx, 42n);
-const closeBufIx = await buildCloseProofBufferInstruction({ payer, nonce: 42n });
-const { instruction: wdIx } = await buildWithdrawInstruction({
-  payer,
-  poolId: 0,
-  outPageId: 1n,
-  inputPageIds: [0n],
-  ring,
-  inputNote: note,
-  secretIndex: note.slotIndex,
-  recipientAccount: payer,
-  changeAddr: alice.address,
-  amount: 1_000_000n,
-});
-
-assert.equal(depIx.data.length, 139);
-assert.equal(xferIx.data.length, 2373);
-assert.equal(closeBufIx.data.length, 1);
-assert.equal(wdIx.data.length, 1973);
-
-console.log('[4/6 PROVER]');
-console.log(`  Deposit ix    : ${depIx.data.length} B (tag=${depIx.data[0]})`);
-console.log(`  Transfer m=5  : ${xferIx.data.length} B (tag=${xferIx.data[0]}, ProofBuffer chunks=${bufPlan.uploadChunks.length}, CloseProofBuffer=${closeBufIx.data.length} B)`);
-console.log(`  Withdraw ix   : ${wdIx.data.length} B (tag=${wdIx.data[0]})`);
-
-// 5. DISCLOSURE & AUDIT — Mode 1 Selective Disclosure + Institutional Auditor ElGamal decrypt
-const sd = createSelectiveDisclosureProof(note);
-assert.equal((await verifySelectiveDisclosureReceipt(sd)).valid, true);
-assert.equal((await verifySelectiveDisclosureOnPage(sd, pageBytes)).valid, true);
-assert.equal((await verifySelectiveDisclosureOnPage({ ...sd, amount: BigInt(sd.amount) + 1n }, pageBytes)).valid, false);
-
-const auditor = await deriveAuditorKeypair(fromHex(vectors.auditor.auditor_seed_hex));
-const decrypted = auditorDecryptNote({
-  auditorSk: auditor.auditorSk,
-  s1: fromHex(vectors.auditor.elgamal_s1_hex),
-  s2: fromHex(vectors.auditor.elgamal_s2_hex),
-  m1: fromHex(vectors.auditor.elgamal_m1_hex),
-  m2: fromHex(vectors.auditor.elgamal_m2_hex),
-});
-assert.equal(toHex(decrypted.spentStealthPk), vectors.auditor.expected_spent_pk_hex);
-assert.equal(toHex(decrypted.assetGenerator), vectors.auditor.expected_asset_gen_hex);
-
-console.log('[5/6 DISCLOSURE & AUDIT]');
-console.log('  Mode 1 proof  : verified standalone & on-page (tampered rejected)');
-console.log('  Auditor decrypt: spent stealth_pk & asset_generator verified');
-
-// 6. RELAYER & ESCROW CPI — Unified cross-SDK prepareEscrowAccounts & AUDREN_DEFAULT_RELAY_URL
-const { address: escrowInAta } = await deriveAssociatedTokenAddress(
-  escrow0Pda.address,
-  USDC_MINT,
-  CLASSIC_TOKEN_PROGRAM_ID,
+console.log(
+  `  Pool #0 PDA   : ${poolPda} (active_lanes=${poolState.activeLanes}, ckpt_interval=${poolState.ckptInterval})`,
 );
-const { address: escrowOutAta } = await deriveAssociatedTokenAddress(
-  escrow0Pda.address,
-  WSOL_MINT,
-  CLASSIC_TOKEN_PROGRAM_ID,
+console.log(`  SOL Vault     : ${solVaultPda}`);
+console.log(`  Vault Auth    : ${vaultAuthPda}`);
+console.log(`  Lane #2 PDA   : ${lane2Pda}`);
+console.log(`  Escrow #5 PDA : ${escrow5Pda}`);
+console.log(
+  `  Checkpoint #13: slot_idx=${ckpt.slotIdx}, lane2_leaves=${ckpt.laneCounts[2]}, super_root=${toHex(ckpt.superRoot)}`,
 );
-const prepared = await prepareEscrowAccounts({
-  poolId: 0,
-  shardId: 0,
-  inputMint: USDC_MINT,
-  outputMint: WSOL_MINT,
-  actionAccounts: [
-    { pubkey: escrowInAta, isSigner: false, isWritable: true },
-    { pubkey: escrowOutAta, isSigner: false, isWritable: true },
-    { pubkey: escrow0Pda.address, isSigner: true, isWritable: false },
+
+// 3. MEMOS & ZERO-INDEXER COMPACT STORE
+const ephSec = fromHex(v.memo.eph_secret_hex);
+const amount = BigInt(v.memo.amount);
+const mintBytes = fromHex(v.memo.mint_hex);
+const { tweak, blinding, memo90 } = encryptNoteMemo(alice.viewPk, ephSec, amount, mintBytes);
+const stealth = deriveStealthOwner(alice.spendPk, tweak);
+const solAsset = deriveAssetId(NATIVE_SOL_MINT_BYTES);
+const cmBe = fromHex(v.memo.commitment_hex);
+const cmFr = frFromBeBytesStrict(cmBe);
+
+const dec = tryDecryptAndVerifyMemo90(fvk, memo90, cmBe);
+assert.ok(dec);
+assert.equal(dec.amount, amount);
+
+const nfSample = fromHex(v.pdas.nullifier_hex);
+const nfPda = deriveNullifierPdaSync(poolId, nfSample).address;
+const unwrapPda = deriveUnwrapPdaSync(poolId, nfSample).address;
+const store = new CompactWalletStore(poolId, 0n);
+assert.equal(store.poolId, 0);
+
+console.log('[3/6 MEMOS & COMPACT STORE]');
+console.log(
+  `  Memo (90 B)   : ${toHex(memo90).slice(0, 16)}... -> decrypted ${dec.amount} lamports (Poseidon verified)`,
+);
+console.log(`  Nullifier PDA : ${nfPda}`);
+console.log(`  Unwrap PDA    : ${unwrapPda}`);
+console.log(`  CompactStore  : initialized (pool_id=${store.poolId}, indexer=none)`);
+
+// 4. BN254 GROTH16 WASM PROVER & INSTRUCTIONS
+const ctxPriv = computeJoinsplitCtxHash({
+  poolId,
+  outLaneId: 2,
+  outputMask: 0b111,
+  assetMode: ASSET_MODE_PRIVATE,
+  unwrapWsol: false,
+  publicAssetId: new Uint8Array(32),
+  publicAmountOut: 0n,
+  relayerFeeAmount: 0n,
+  memosBytes: memo90,
+});
+const wsolAsset = deriveAssetId(base58Decode(WSOL_MINT));
+const ctxWsol = computeJoinsplitCtxHash({
+  poolId,
+  outLaneId: 2,
+  outputMask: 0,
+  assetMode: ASSET_MODE_SPL,
+  unwrapWsol: true,
+  recipient: sess0.pubkeyBase58,
+  relayerFeeRecipient: sess3.pubkeyBase58,
+  publicAssetId: frToBeBytes(wsolAsset),
+  publicAmountOut: 1_000_000_000n,
+  relayerFeeAmount: 5_000_000n,
+  memosBytes: new Uint8Array(0),
+});
+const usdcAsset = deriveAssetId(base58Decode(USDC_MINT));
+const dynM = prepareDynamicSwapMemo(bob.viewPk, new Uint8Array(32).fill(0x44));
+const ctxExec = computeExecCtxHash({
+  poolId,
+  outLaneId: 1,
+  escrowShard: 3,
+  changeMask: 0b01,
+  inKind: 1,
+  outKind: 0,
+  feeOnOutput: true,
+  assetIn: frToBeBytes(usdcAsset),
+  amountIn: 50_000_000n,
+  relayerFeeAmount: 2_000_000n,
+  relayerFeeRecipient: sess3.pubkeyBase58,
+  assetOut: frToBeBytes(solAsset),
+  minAmountOut: 400_000_000n,
+  routerProg: base58Encode(new Uint8Array(32).fill(0x77)),
+  routerAccounts: [
+    { pubkey: base58Encode(new Uint8Array(32).fill(0x88)), isSigner: false, isWritable: true },
+    { pubkey: base58Encode(new Uint8Array(32).fill(0x99)), isSigner: false, isWritable: false },
   ],
+  outStealthOwner: frToBeBytes(stealth),
+  outBlinding: frToBeBytes(blinding),
+  dynMemoHead: dynM.dynHead34,
+  dynMask56: dynM.dynMask56,
+  routerIxData: new Uint8Array([1, 2, 3, 4]),
+  changeMemos: memo90,
 });
-const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
-assert.deepEqual([prepared.escrowIdx, prepared.escrowInIdx, prepared.escrowOutIdx], [2, 0, 1]);
-assert.equal(outerSigners, 0);
+
+// Real 192-byte BN254 Groth16 proof in WASM verified byte-for-byte against spec/test-vectors.json
+const leaves = [0n, 0n, 0n, 0n, 0n, cmFr];
+let lroot = computeSubtree256Root(leaves, 6);
+for (let h = 4; h < 18; h++) {
+  lroot = poseidon4(lroot, ZERO_HASHES_4ARY[h], ZERO_HASHES_4ARY[h], ZERO_HASHES_4ARY[h]);
+}
+const laneRoots = new Array(NUM_LANES).fill(ZERO_HASHES_4ARY[18]);
+laneRoots[2] = lroot;
+const superRoot = computeSuperRoot4Ary(laneRoots);
+const path5 = buildHistoricalWitness4Ary({
+  laneId: 2,
+  targetLeafIdx: 5n,
+  ckptLaneRoots: laneRoots,
+  ckptLaneLeafCount: 6n,
+  finalizedSubtreeRoots: [],
+  targetPageLeaves: leaves,
+  frontierPageLeaves: leaves,
+});
+
+const prover = await AudrenWasmProver.init();
+const proved = prover.proveJoinsplit(
+  {
+    superRoot,
+    txAssetId: solAsset,
+    publicAssetId: 0n,
+    publicAmountOut: 0n,
+    relayerFeeAmount: 0n,
+    ctxHash: ctxPriv,
+    omitNf1: true,
+    inputs: [
+      {
+        spendSk: alice.spendSk,
+        tweak,
+        assetId: solAsset,
+        amount,
+        blinding,
+        isDummy: false,
+        merklePath: path5,
+      },
+      dummyInputWitness(alice.spendSk, solAsset, 0x5555n),
+    ],
+    outputs: [
+      {
+        stealthOwner: deriveStealthOwner(bob.spendPk, 0x101n),
+        assetId: solAsset,
+        amount: 1_000_000n,
+        blinding: 0x201n,
+      },
+      {
+        stealthOwner: deriveStealthOwner(alice.spendPk, 0x102n),
+        assetId: solAsset,
+        amount: 500_000n,
+        blinding: 0x202n,
+      },
+      dummyOutputWitness(solAsset, 0x203n),
+    ],
+  },
+  new Uint8Array(32).fill(0x99),
+);
+assert.equal(toHex(proved.proof192), v.groth16.proof_192_hex);
+
+const depIx = buildDepositSolInstruction({
+  depositor: sess0.pubkeyBase58,
+  poolId,
+  laneId: 2,
+  subPageSeq: 7n,
+  rootPageSeq: 7n,
+  memoPageSeq: 7n,
+  feeFromAmount: true,
+  amount,
+  stealthOwner: stealth,
+  blinding,
+  memo90,
+});
+const jsIx = buildJoinsplitInstruction({
+  payer: sess0.pubkeyBase58,
+  poolId,
+  ckptSlotIdx: 13,
+  outLaneId: 2,
+  outSubSeq: 7n,
+  outRootSeq: 7n,
+  outMemoSeq: 7n,
+  outNfSeq: 7n,
+  outputMask: 0b111,
+  assetMode: ASSET_MODE_PRIVATE,
+  unwrapWsol: false,
+  proof192: proved.proof192,
+  nf0: proved.nf0,
+  nf1: proved.nf1,
+  cm0: proved.cm0,
+  cm1: proved.cm1,
+  cm2: proved.cm2,
+  publicAmountOut: 0n,
+  relayerFeeAmount: 0n,
+  recipient: SYSTEM_PROGRAM_ID,
+  relayerFeeRecipient: SYSTEM_PROGRAM_ID,
+  memosBytes: memo90,
+});
+
+console.log('[4/6 INSTRUCTIONS & GROTH16]');
+console.log(`  DepositSol    : ${depIx.data.length} B (tag=${depIx.data[0]}, fee_from_amount=true)`);
+console.log(
+  `  JoinSplit     : ${jsIx.data.length} B (tag=${jsIx.data[0]}, proof=${proved.proof192.length} B Groth16, 1 Tx v1)`,
+);
+console.log(`  ctx_hash priv : ${toHex(frToBeBytes(ctxPriv))}`);
+console.log(`  ctx_hash wsol : ${toHex(frToBeBytes(ctxWsol))}`);
+console.log(`  ctx_hash exec : ${toHex(frToBeBytes(ctxExec))}`);
+
+// 5. DISCLOSURE & COMPLIANCE
+const sd = {
+  poolId: 0,
+  laneId: 2,
+  leafIndex: 5n,
+  stealthOwner: frToBeBytes(stealth),
+  mint: mintBytes,
+  amount,
+  blinding: frToBeBytes(blinding),
+  commitment: cmBe,
+};
+assert.equal(verifySelectiveDisclosureProof(sd, cmBe), true);
+assert.equal(verifySelectiveDisclosureProof({ ...sd, amount: amount + 1n }, cmBe), false);
+
+console.log('[5/6 DISCLOSURE & COMPLIANCE]');
+console.log('  Mode 1 proof  : verified against on-chain leaf (tampered rejected)');
+console.log('  Mode 2 FVK    : read-only (spend_pk + nk + view_sk + view_pk, zero spend authority)');
+
+// 6. RELAYER & ESCROW CPI
+const escrowUsdcAta = deriveAssociatedTokenAddressSync(escrow5Pda, USDC_MINT, CLASSIC_TOKEN_PROGRAM_ID).address;
+const escrowWsolAta = deriveAssociatedTokenAddressSync(escrow5Pda, WSOL_MINT, CLASSIC_TOKEN_PROGRAM_ID).address;
 
 console.log('[6/6 RELAYER & ESCROW CPI]');
 console.log(`  Default relay : ${AUDREN_DEFAULT_RELAY_URL}`);
-console.log(`  Escrow CPI    : idx=${prepared.escrowIdx}, in=${prepared.escrowInIdx}, out=${prepared.escrowOutIdx} (outer signers=${outerSigners})`);
+console.log(`  Escrow #5 ATAs: usdc=${escrowUsdcAta}, wsol=${escrowWsolAta}`);
 console.log(`  Excluded DEXes: ${JUPITER_CPI_EXCLUDED_DEXES.join(',')}`);
