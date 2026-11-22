@@ -79,7 +79,7 @@ SOLANA_RPC_URL="https://your-solana-rpc" pnpm --dir examples/typescript scan
 
 ## Scope and safety
 
-Audren is pre-audit and currently embeds `DEV_DETERMINISTIC_VK` pending the public Phase-2 Groth16 MPC ceremony and independent audit. Deposits, withdrawals, external DeFi CPI calls (`ExecViaEscrow`), and stateful positions opened by deterministic `DefiSessionKeypair` wallets remain observable on Solana.
+Audren verifies proofs under the BGM17 Groth16 ceremony keys anchored to the official Hermez/PSE Perpetual Powers of Tau (71+ independent public contributors) plus a verifiable drand Quicknet & Solana Mainnet beacon (`ceremony/transcript.json`), and remains pre-audit with mutable upgrade authority pending independent security review. Deposits (`DepositSol` / `DepositSpl` for Classic SPL & Token-2022), withdrawals, external DeFi CPI calls (`ExecViaEscrow`), and stateful positions opened by deterministic `DefiSessionKeypair` wallets remain observable on Solana.
 
 ## License
 

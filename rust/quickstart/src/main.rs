@@ -284,7 +284,7 @@ fn main() {
             JoinSplitOutputWitness::dummy(sol_asset, Fr::from(0x203u64)),
         ],
     );
-    let prover = AudrenProver::from_dev_setup();
+    let prover = AudrenProver::from_canonical_pk();
     let proved = prover.prove_with_seed(circuit, [0x99u8; 32]);
     assert_eq!(to_hex(&proved.proof_192), v["groth16"]["proof_192_hex"].as_str().unwrap());
 

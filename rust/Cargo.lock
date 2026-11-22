@@ -259,13 +259,14 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "audren-circuits"
-version = "1.0.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#6bf007ea99eb72de5f19504ddf9d45084156cecc"
+version = "1.1.0"
+source = "git+https://github.com/audren-xyz/audren.git?branch=main#62b5bdb44ce4fdacdac588f0d194802a7e625155"
 dependencies = [
  "ark-bn254",
  "ark-ec",
  "ark-ff",
  "ark-groth16",
+ "ark-poly",
  "ark-r1cs-std",
  "ark-relations",
  "ark-serialize",
@@ -281,8 +282,8 @@ dependencies = [
 
 [[package]]
 name = "audren-client"
-version = "1.0.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#6bf007ea99eb72de5f19504ddf9d45084156cecc"
+version = "1.1.0"
+source = "git+https://github.com/audren-xyz/audren.git?branch=main#62b5bdb44ce4fdacdac588f0d194802a7e625155"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -304,12 +305,12 @@ dependencies = [
 
 [[package]]
 name = "audren-core"
-version = "1.0.0"
-source = "git+https://github.com/audren-xyz/audren.git?branch=main#6bf007ea99eb72de5f19504ddf9d45084156cecc"
+version = "1.1.0"
+source = "git+https://github.com/audren-xyz/audren.git?branch=main#62b5bdb44ce4fdacdac588f0d194802a7e625155"
 
 [[package]]
 name = "audren-example-institutional-audit"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "audren-client",
  "audren-core",
@@ -319,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "audren-example-quickstart"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ark-bn254",
  "audren-client",
@@ -330,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "audren-example-shielded-transfer"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "audren-client",
  "audren-core",
@@ -1805,18 +1806,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.63"
+version = "0.8.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
+checksum = "ed43f3060383c64b000f3c630550aebdfa9d3b76d48de32390483dd2cc7e0865"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.63"
+version = "0.8.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "863ad3ac83293fb4d740aedbfdc9240dd8d1a50c1099acd76ce80ce7c7230c7f"
+checksum = "a5cbd820fe3e35fb38c83b6dc7e6b1618bc46e0cd10073ae94e8d52dc468d8b9"
 dependencies = [
  "proc-macro2",
  "quote",
