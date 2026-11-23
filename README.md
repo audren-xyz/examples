@@ -17,10 +17,11 @@
   <a href="https://audren.xyz/developers/"><img src="https://img.shields.io/badge/docs-audren.xyz%2Fdevelopers-C83E2B" alt="Developers Docs" /></a>
 </p>
 
-Standardized, runnable examples across all **4 official Audren SDKs — Rust, TypeScript (`@audren/sdk` + WASM prover), Swift (iOS/macOS), and Kotlin (Android/JVM)** — executing the exact same **6 building blocks** (Keys & `DefiSessionKeypair`, 13 PDAs & zero-copy decoders, 90 B SoA memos & zero-indexer `CompactWalletStore`, `192 B` BN254 Groth16 & 9 instructions in a single Transaction v1, Mode 1 Selective Disclosure & Mode 2 `FullViewingKey`, and Relayer / `ExecViaEscrow` CPI) and verified in CI for **100% byte-for-byte canonical stdout parity across all 4 languages**.
+Standardized, runnable examples across all **4 official Audren SDKs — Rust, TypeScript (`@audren/sdk` + WASM prover), Swift (iOS/macOS), and Kotlin (Android/JVM)** — executing the exact same **6 building blocks** (Keys, BIP-350 Bech32m `aud1...` addresses & `DefiSessionKeypair`, 12 PDAs & zero-copy decoders, versioned `106 B` SoA memos & zero-indexer `CompactWalletStore`, `192 B` BN254 Groth16 & 9 instructions in a single Transaction v1, Mode 1 Selective Disclosure & Mode 2 `FullViewingKey`, and Relayer / `ExecViaEscrow` CPI) and verified in CI for **100% byte-for-byte canonical stdout parity across all 4 languages**.
 
-- **Program ID:** `AUDRBK6kVkQoEGm3EB7swd34SUPqrHZeNEkB5vZWVSv3`
-- **Canonical Pool `#0` PDA (`audren_v2_pool`):** `8CN7uxRdQGjuAaZQVVcHRZbptSzvgfUv7tg8EarLHztF`
+- **Program ID:** `AUDRBK6kVkQoEGm3EB7swd34SUPqrHZeNEkB5vZWVSv3` (`PROTOCOL_VERSION = 1`, release `1.2.0`)
+- **Canonical Pool `#0` PDA (`audren_pool`):** `5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`
+- **Canonical Vault Authority `#0` PDA (`audren_vault_auth`):** `3aMtBvVMatfBvoBWQaTxCPwQ2SWyW5ejceVgLFTtk2WF`
 - **Core Protocol & 4 Official SDKs:** [`audren-xyz/audren`](https://github.com/audren-xyz/audren)
 - **Canonical Conformance Vectors:** [`spec/test-vectors.json`](https://github.com/audren-xyz/audren/blob/main/spec/test-vectors.json)
 
@@ -29,7 +30,7 @@ Standardized, runnable examples across all **4 official Audren SDKs — Rust, Ty
 | Language | Quickstart Path | Official SDK Consumed | Additional Examples |
 | --- | --- | --- | --- |
 | **Rust** | [`rust/quickstart`](./rust/quickstart) | `audren-client` + `audren-core` | [`rust/shielded-transfer`](./rust/shielded-transfer) (Solana Transaction v1 `0x81` lifecycle), [`rust/institutional-audit`](./rust/institutional-audit) (Mode 1 & Mode 2) |
-| **TypeScript** | [`typescript/quickstart`](./typescript/quickstart) | `@audren/sdk` + `@audren/sdk/prover` (WASM) | [`typescript/dataslice-scanner`](./typescript/dataslice-scanner) (zero-indexer `CompactWalletStore` RPC sync), [`typescript/jupiter-private-swap`](./typescript/jupiter-private-swap) (`ExecViaEscrow` Tag 7) |
+| **TypeScript** | [`typescript/quickstart`](./typescript/quickstart) | `@audren/sdk` + `@audren/sdk/prover` (WASM) | [`typescript/dataslice-scanner`](./typescript/dataslice-scanner) (zero-indexer `CompactWalletStore` RPC sync), [`typescript/jupiter-private-swap`](./typescript/jupiter-private-swap) (`ExecViaEscrow` Tag 6) |
 | **Swift (iOS / macOS)** | [`swift/quickstart`](./swift/quickstart) | `AudrenSDK` (`packages/swift` via UniFFI) | — |
 | **Kotlin (Android / JVM)** | [`kotlin/quickstart`](./kotlin/quickstart) | `xyz.audren.sdk` (`packages/kotlin` via UniFFI + JNA) | — |
 
@@ -78,7 +79,7 @@ SOLANA_RPC_URL="https://your-solana-rpc" pnpm --dir examples/typescript scan
 
 ## Scope and safety
 
-Audren verifies proofs under the BGM17 Groth16 ceremony keys anchored to the official Hermez/PSE Perpetual Powers of Tau (71+ independent public contributors) plus a verifiable drand Quicknet & Solana Mainnet beacon (`ceremony/transcript.json`), and remains pre-audit with mutable upgrade authority pending independent security review. Deposits (`DepositSol` / `DepositSpl` for Classic SPL & Token-2022), withdrawals, external DeFi CPI calls (`ExecViaEscrow`), and stateful positions opened by deterministic `DefiSessionKeypair` wallets remain observable on Solana.
+Audren verifies proofs under the BGM17 Groth16 ceremony keys anchored to the official Hermez/PSE Perpetual Powers of Tau (71+ independent public contributors) plus a verifiable drand Quicknet & Solana Mainnet beacon (`ceremony/transcript.json`), and remains pre-audit with mutable upgrade authority pending independent security review. Unified deposits (`Deposit`, Tag 3, supporting Native SOL via `SyncNative` WSOL as well as Classic SPL & Token-2022), public withdrawals (`Transact`, Tag 5, `ASSET_MODE_PUBLIC` + optional `WITHDRAW_FLAG_UNWRAP_WSOL`), external DeFi CPI calls (`ExecViaEscrow`, Tag 6), and stateful positions opened by deterministic `DefiSessionKeypair` wallets remain observable on Solana.
 
 ## License
 

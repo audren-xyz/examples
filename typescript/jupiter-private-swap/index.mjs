@@ -1,7 +1,7 @@
 /**
- * Audren Example — Isolated Escrow Account Mapping for `ExecViaEscrow` (`Tag 7`) using `@audren/sdk`.
+ * Audren v1 Example — Isolated Escrow Account Mapping for `ExecViaEscrow` (`Tag 6`) using `@audren/sdk`.
  *
- * Derives canonical Pool #0 `audren_v2_escrow` shard 0 PDA & Classic SPL ATAs, maps router accounts
+ * Derives canonical Pool #0 `audren_escrow` shard 0 PDA & Classic SPL ATAs, maps router accounts
  * cleanly with zero outer signers (Audren signs via `invoke_signed`), and prints synced `JUPITER_CPI_EXCLUDED_DEXES`.
  *
  * Run (from `typescript/`):
@@ -91,7 +91,7 @@ if (process.env.LIVE_QUOTE === '1') {
   });
   const outerSigners = prepared.accounts.filter((a) => a.isSigner).length;
   assert.equal(outerSigners, 0);
-  console.log('Offline ExecViaEscrow (Tag 7) account mapping via @audren/sdk:');
+  console.log('Offline ExecViaEscrow (Tag 6) account mapping via @audren/sdk:');
   console.log({
     audrenProgramId: AUDREN_PROGRAM_ID,
     escrowPda: prepared.escrowPda,

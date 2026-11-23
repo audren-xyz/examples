@@ -1,4 +1,4 @@
-//! Audren Canonical 6-Building-Block Quickstart (Rust SDK — `audren-client`).
+//! Audren v1 Canonical 6-Building-Block Quickstart (Rust SDK — `audren-client`).
 //!
 //! Runs completely offline (zero RPC required) against `spec/test-vectors.json` and emits
 //! 100% byte-for-byte identical canonical stdout across Rust, TypeScript, Swift, and Kotlin.
@@ -18,20 +18,21 @@ use audren_client::{
         poseidon::{fr_from_be_bytes_strict, fr_to_be_bytes, poseidon4},
     },
     audren_core::{
-        instruction::{ASSET_MODE_PRIVATE, ASSET_MODE_SPL, VK_ID_DEFAULT},
-        AUDREN_PROGRAM_ID, NATIVE_SOL_MINT, NUM_LANES, PROTOCOL_VERSION, WSOL_MINT,
+        instruction::{ASSET_MODE_PRIVATE, ASSET_MODE_PUBLIC, VK_ID_DEFAULT},
+        layout::{MEMO_CT_LEN, MEMO_ENTRY_WIRE_LEN, MEMO_PAYMENT_ID_LEN},
+        AUDREN_PROGRAM_ID, CLASSIC_TOKEN_PROGRAM_ID, NUM_LANES, PROTOCOL_VERSION, WSOL_MINT,
     },
     instructions::{
-        build_deposit_sol, build_joinsplit, compute_exec_ctx_hash, compute_joinsplit_ctx_hash,
+        build_deposit, build_transact, compute_exec_ctx_hash, compute_transact_ctx_hash,
         AudrenAccountMeta,
     },
     keys::{
-        encrypt_note_memo, prepare_dynamic_swap_memo, try_decrypt_and_verify_memo_entry,
-        AudrenAddress, AudrenKeys, SelectiveDisclosureProof,
+        encrypt_note_memo_with_payment_id, prepare_dynamic_swap_memo,
+        try_decrypt_and_verify_memo_entry, AudrenAddress, AudrenKeys, SelectiveDisclosureProof,
     },
     pda::{
         derive_ata, derive_escrow_pda, derive_lane_pda, derive_nullifier_pda, derive_pool_pda,
-        derive_sol_vault_pda, derive_unwrap_pda, derive_vault_auth_pda,
+        derive_unwrap_pda, derive_vault_auth_pda,
     },
     prover::AudrenProver,
     router::{DEFAULT_RELAY_URL, JUPITER_CPI_EXCLUDED_DEXES},
@@ -40,9 +41,7 @@ use audren_client::{
 };
 use solana_address::Address;
 
-const CLASSIC_TOKEN_PROGRAM_B58: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const USDC_MINT_B58: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-const WSOL_MINT_B58: &str = "So11111111111111111111111111111111111111112";
 
 fn decode_hex(hex: &str) -> Vec<u8> {
     (0..hex.len())
@@ -51,8 +50,8 @@ fn decode_hex(hex: &str) -> Vec<u8> {
         .collect()
 }
 
-fn decode_hex_32(hex: &str) -> [u8; 32] {
-    decode_hex(hex).try_into().expect("32-byte hex")
+fn decode_hex_arr<const N: usize>(hex: &str) -> [u8; N] {
+    decode_hex(hex).try_into().expect("exact hex array length")
 }
 
 fn to_hex(b: &[u8]) -> String {
@@ -84,11 +83,13 @@ fn main() {
     let v: serde_json::Value = serde_json::from_str(&raw).expect("parse JSON");
 
     let program_id = Address::new_from_array(AUDREN_PROGRAM_ID);
+    let token_prog = Address::new_from_array(CLASSIC_TOKEN_PROGRAM_ID);
+    let wsol_mint = Address::new_from_array(WSOL_MINT);
     let pool_id = 0u32;
 
     // 1. KEYS & COMPLIANCE
-    let alice_seed = decode_hex_32(v["alice"]["seed_hex"].as_str().unwrap());
-    let bob_seed = decode_hex_32(v["bob"]["seed_hex"].as_str().unwrap());
+    let alice_seed = decode_hex_arr::<32>(v["alice"]["seed_hex"].as_str().unwrap());
+    let bob_seed = decode_hex_arr::<32>(v["bob"]["seed_hex"].as_str().unwrap());
     let alice = AudrenKeys::from_seed(&alice_seed);
     let alice_sub1 = AudrenKeys::from_seed_subaccount(&alice_seed, 1);
     let bob = AudrenKeys::from_seed(&bob_seed);
@@ -100,6 +101,7 @@ fn main() {
     let alice_addr_str = alice.address().encode();
     let parsed = AudrenAddress::decode(&alice_addr_str).unwrap();
     assert_eq!(parsed.spend_pk, fr_to_be_bytes(&alice.spend_pk));
+    assert_eq!(alice_addr_str, v["alice"]["address"].as_str().unwrap());
 
     println!("[1/6 KEYS]");
     println!("  Program ID    : {program_id} (v{PROTOCOL_VERSION})");
@@ -110,7 +112,6 @@ fn main() {
 
     // 2. PDAs & ZERO-COPY LAYOUTS
     let (pool_pda, _) = derive_pool_pda(&program_id, pool_id);
-    let (sol_vault_pda, _) = derive_sol_vault_pda(&program_id, pool_id);
     let (vault_auth_pda, _) = derive_vault_auth_pda(&program_id, pool_id);
     let (lane2_pda, _) = derive_lane_pda(&program_id, pool_id, 2);
     let (escrow5_pda, _) = derive_escrow_pda(&program_id, pool_id, 5);
@@ -124,7 +125,6 @@ fn main() {
         "  Pool #0 PDA   : {pool_pda} (active_lanes={}, ckpt_interval={})",
         pool_state.active_lanes, pool_state.ckpt_interval
     );
-    println!("  SOL Vault     : {sol_vault_pda}");
     println!("  Vault Auth    : {vault_auth_pda}");
     println!("  Lane #2 PDA   : {lane2_pda}");
     println!("  Escrow #5 PDA : {escrow5_pda}");
@@ -136,23 +136,29 @@ fn main() {
     );
 
     // 3. MEMOS & ZERO-INDEXER COMPACT STORE
-    let eph_sec = decode_hex_32(v["memo"]["eph_secret_hex"].as_str().unwrap());
+    let eph_sec = decode_hex_arr::<32>(v["memo"]["eph_secret_hex"].as_str().unwrap());
     let amount = v["memo"]["amount"].as_u64().unwrap();
-    let mint_bytes = decode_hex_32(v["memo"]["mint_hex"].as_str().unwrap());
-    let (tweak, blinding, memo_90) = encrypt_note_memo(&alice.view_pk, eph_sec, amount, &mint_bytes);
+    let mint_bytes = decode_hex_arr::<32>(v["memo"]["mint_hex"].as_str().unwrap());
+    let payment_id =
+        decode_hex_arr::<MEMO_PAYMENT_ID_LEN>(v["memo"]["payment_id_hex"].as_str().unwrap());
+    let (tweak, blinding, memo_106) =
+        encrypt_note_memo_with_payment_id(&alice.view_pk, eph_sec, amount, &mint_bytes, payment_id)
+            .expect("valid recipient view_pk");
+    assert_eq!(to_hex(&memo_106), v["memo"]["memo_106_hex"].as_str().unwrap());
     let stealth = derive_stealth_owner(alice.spend_pk, tweak);
-    let sol_asset = derive_asset_id(&NATIVE_SOL_MINT);
-    let cm_be = decode_hex_32(v["memo"]["commitment_hex"].as_str().unwrap());
+    let wsol_asset = derive_asset_id(&WSOL_MINT);
+    let cm_be = decode_hex_arr::<32>(v["memo"]["commitment_hex"].as_str().unwrap());
     let cm_fr = fr_from_be_bytes_strict(&cm_be).unwrap();
 
-    let vt = [memo_90[0], memo_90[1]];
-    let epk: [u8; 32] = memo_90[2..34].try_into().unwrap();
-    let ct: [u8; 56] = memo_90[34..90].try_into().unwrap();
+    let vt = [memo_106[0], memo_106[1]];
+    let epk: [u8; 32] = memo_106[2..34].try_into().unwrap();
+    let ct: [u8; MEMO_CT_LEN] = memo_106[34..MEMO_ENTRY_WIRE_LEN].try_into().unwrap();
     let dec = try_decrypt_and_verify_memo_entry(&fvk, vt, &epk, &ct, &cm_be)
         .expect("FVK memo decrypt + Poseidon commitment check");
     assert_eq!(dec.amount, amount);
+    assert_eq!(dec.payment_id, payment_id);
 
-    let nf_sample = decode_hex_32(v["pdas"]["nullifier_hex"].as_str().unwrap());
+    let nf_sample = decode_hex_arr::<32>(v["pdas"]["nullifier_hex"].as_str().unwrap());
     let (nf_pda, _) = derive_nullifier_pda(&program_id, pool_id, &nf_sample);
     let (unwrap_pda, _) = derive_unwrap_pda(&program_id, pool_id, &nf_sample);
     let store = CompactWalletStore::new(pool_id, 0);
@@ -160,18 +166,23 @@ fn main() {
 
     println!("[3/6 MEMOS & COMPACT STORE]");
     println!(
-        "  Memo (90 B)   : {}... -> decrypted {} lamports (Poseidon verified)",
-        &to_hex(&memo_90)[..16],
-        dec.amount
+        "  Memo (106 B)  : {}... -> decrypted {} lamports (payment_id={}, Poseidon verified)",
+        &to_hex(&memo_106)[..16],
+        dec.amount,
+        to_hex(&dec.payment_id),
     );
     println!("  Nullifier PDA : {nf_pda}");
     println!("  Unwrap PDA    : {unwrap_pda}");
-    println!("  CompactStore  : initialized (pool_id={}, indexer=none)", store.pool_id);
+    println!(
+        "  CompactStore  : initialized (pool_id={}, indexer=none)",
+        store.pool_id
+    );
 
     // 4. BN254 GROTH16 PROVER & INSTRUCTIONS
-    let ctx_priv = compute_joinsplit_ctx_hash(
+    let ctx_priv = compute_transact_ctx_hash(
         &program_id,
         pool_id,
+        VK_ID_DEFAULT,
         2,
         0b111,
         ASSET_MODE_PRIVATE,
@@ -181,15 +192,22 @@ fn main() {
         &[0u8; 32],
         0,
         0,
-        &memo_90,
+        &memo_106,
     );
-    let wsol_asset = derive_asset_id(&WSOL_MINT);
-    let ctx_wsol = compute_joinsplit_ctx_hash(
+    assert_eq!(
+        to_hex(&fr_to_be_bytes(&ctx_priv)),
+        v["ctx_hashes"]["transact_private_ctx_hash_hex"]
+            .as_str()
+            .unwrap()
+    );
+
+    let ctx_wsol = compute_transact_ctx_hash(
         &program_id,
         pool_id,
+        VK_ID_DEFAULT,
         2,
         0,
-        ASSET_MODE_SPL,
+        ASSET_MODE_PUBLIC,
         true,
         Some(&sess0_addr),
         Some(&sess3_addr),
@@ -198,23 +216,31 @@ fn main() {
         5_000_000,
         &[],
     );
+    assert_eq!(
+        to_hex(&fr_to_be_bytes(&ctx_wsol)),
+        v["ctx_hashes"]["transact_wsol_unwrap_ctx_hash_hex"]
+            .as_str()
+            .unwrap()
+    );
+
     let usdc_mint = Address::from_str(USDC_MINT_B58).unwrap();
     let usdc_asset = derive_asset_id(&usdc_mint.to_bytes());
-    let (_, _, dyn_head, dyn_mask) = prepare_dynamic_swap_memo(&bob.view_pk, [0x44u8; 32]);
+    let dyn_eph = decode_hex_arr::<32>(v["memo"]["dyn_eph_secret_hex"].as_str().unwrap());
+    let (_, _, dyn_head, dyn_mask) =
+        prepare_dynamic_swap_memo(&bob.view_pk, dyn_eph).expect("valid bob view_pk");
     let ctx_exec = compute_exec_ctx_hash(
         &program_id,
         pool_id,
+        VK_ID_DEFAULT,
         1,
         3,
         0b01,
-        1,
-        0,
         true,
         &fr_to_be_bytes(&usdc_asset),
         50_000_000,
         2_000_000,
         Some(&sess3_addr),
-        &fr_to_be_bytes(&sol_asset),
+        &fr_to_be_bytes(&wsol_asset),
         400_000_000,
         &Address::new_from_array([0x77u8; 32]),
         &[
@@ -226,11 +252,24 @@ fn main() {
         &dyn_head,
         &dyn_mask,
         &[1, 2, 3, 4],
-        &memo_90,
+        &memo_106,
+    );
+    assert_eq!(
+        to_hex(&fr_to_be_bytes(&ctx_exec)),
+        v["ctx_hashes"]["exec_fee_on_output_ctx_hash_hex"]
+            .as_str()
+            .unwrap()
     );
 
     // Real 192-byte BN254 Groth16 proof verified byte-for-byte against spec/test-vectors.json
-    let leaves = [Fr::from(0u64), Fr::from(0u64), Fr::from(0u64), Fr::from(0u64), Fr::from(0u64), cm_fr];
+    let leaves = [
+        Fr::from(0u64),
+        Fr::from(0u64),
+        Fr::from(0u64),
+        Fr::from(0u64),
+        Fr::from(0u64),
+        cm_fr,
+    ];
     let zh = zero_hashes_4ary();
     let mut lroot = compute_subtree_256_root(&leaves, 6);
     for z in zh.iter().take(18).skip(4) {
@@ -242,7 +281,7 @@ fn main() {
     let path5 = build_historical_witness_4ary(2, 5, &lane_roots, 6, &[], &leaves, Some(&leaves));
     let circuit = JoinSplit4AryCircuit::new_with_options(
         super_root,
-        sol_asset,
+        wsol_asset,
         Fr::from(0u64),
         0,
         0,
@@ -252,7 +291,7 @@ fn main() {
             JoinSplitInputWitness {
                 spend_sk: alice.spend_sk,
                 tweak,
-                asset_id: sol_asset,
+                asset_id: wsol_asset,
                 amount,
                 blinding,
                 is_dummy: false,
@@ -261,7 +300,7 @@ fn main() {
             JoinSplitInputWitness {
                 spend_sk: alice.spend_sk,
                 tweak: Fr::from(0u64),
-                asset_id: sol_asset,
+                asset_id: wsol_asset,
                 amount: 0,
                 blinding: Fr::from(0x5555u64),
                 is_dummy: true,
@@ -271,27 +310,35 @@ fn main() {
         [
             JoinSplitOutputWitness {
                 stealth_owner: derive_stealth_owner(bob.spend_pk, Fr::from(0x101u64)),
-                asset_id: sol_asset,
+                asset_id: wsol_asset,
                 amount: 1_000_000,
                 blinding: Fr::from(0x201u64),
             },
             JoinSplitOutputWitness {
                 stealth_owner: derive_stealth_owner(alice.spend_pk, Fr::from(0x102u64)),
-                asset_id: sol_asset,
+                asset_id: wsol_asset,
                 amount: 500_000,
                 blinding: Fr::from(0x202u64),
             },
-            JoinSplitOutputWitness::dummy(sol_asset, Fr::from(0x203u64)),
+            JoinSplitOutputWitness::dummy(wsol_asset, Fr::from(0x203u64)),
         ],
     );
     let prover = AudrenProver::from_canonical_pk();
     let proved = prover.prove_with_seed(circuit, [0x99u8; 32]);
-    assert_eq!(to_hex(&proved.proof_192), v["groth16"]["proof_192_hex"].as_str().unwrap());
+    assert_eq!(
+        to_hex(&proved.proof_192),
+        v["groth16"]["proof_192_hex"].as_str().unwrap()
+    );
 
-    let dep_ix = build_deposit_sol(
+    let vault_wsol_ata = derive_ata(&vault_auth_pda, &token_prog, &wsol_mint);
+    let dep_ix = build_deposit(
         program_id,
         sess0_addr,
         pool_id,
+        wsol_mint,
+        sess0_addr,
+        vault_wsol_ata,
+        token_prog,
         2,
         7,
         7,
@@ -299,12 +346,14 @@ fn main() {
         None,
         None,
         true,
+        true,
         amount,
         stealth,
         blinding,
-        &memo_90,
+        &memo_106,
+        &[],
     );
-    let js_ix = build_joinsplit(
+    let tx_ix = build_transact(
         program_id,
         sess0_addr,
         pool_id,
@@ -330,16 +379,20 @@ fn main() {
         0,
         Address::new_from_array([0u8; 32]),
         Address::new_from_array([0u8; 32]),
-        &memo_90,
+        &memo_106,
         &[],
     );
 
     println!("[4/6 INSTRUCTIONS & GROTH16]");
-    println!("  DepositSol    : {} B (tag={}, fee_from_amount=true)", dep_ix.data.len(), dep_ix.data[0]);
     println!(
-        "  JoinSplit     : {} B (tag={}, proof={} B Groth16, 1 Tx v1)",
-        js_ix.data.len(),
-        js_ix.data[0],
+        "  Deposit       : {} B (tag={}, native_sol=true, fee_from_amount=true)",
+        dep_ix.data.len(),
+        dep_ix.data[0]
+    );
+    println!(
+        "  Transact      : {} B (tag={}, proof={} B Groth16, 1 Tx v1)",
+        tx_ix.data.len(),
+        tx_ix.data[0],
         proved.proof_192.len()
     );
     println!("  ctx_hash priv : {}", to_hex(&fr_to_be_bytes(&ctx_priv)));
@@ -366,8 +419,6 @@ fn main() {
     println!("  Mode 2 FVK    : read-only (spend_pk + nk + view_sk + view_pk, zero spend authority)");
 
     // 6. RELAYER & ESCROW CPI
-    let token_prog = Address::from_str(CLASSIC_TOKEN_PROGRAM_B58).unwrap();
-    let wsol_mint = Address::from_str(WSOL_MINT_B58).unwrap();
     let escrow_usdc_ata = derive_ata(&escrow5_pda, &token_prog, &usdc_mint);
     let escrow_wsol_ata = derive_ata(&escrow5_pda, &token_prog, &wsol_mint);
 

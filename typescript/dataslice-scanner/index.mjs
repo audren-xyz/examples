@@ -1,8 +1,10 @@
 /**
- * Audren Example — Zero-Indexer Ordinary Solana RPC `CompactWalletStore` Scanner (`@audren/sdk`).
+ * Audren v1 Example — Zero-Indexer Ordinary Solana RPC `CompactWalletStore` Scanner (`@audren/sdk`).
  *
- * Syncs `PoolState`, active `LaneTreeState` headers, `SubtreePage`, `MemoPage`, and `NullifierPage`
- * PDAs in batched `getMultipleAccounts` calls using zero off-chain indexers.
+ * Syncs `PoolState`, active `LaneTreeState` headers, `SubtreePage`, `MemoPage` (`10,240 B`, `96`
+ * versioned `106 B` SoA memos/page), and `NullifierPage` PDAs in uniform batched `getMultipleAccounts`
+ * calls using zero off-chain indexers (`privacyMode: 'strict'` default; pass `AUDREN_PRIVACY_MODE=fast`
+ * for opt-in `[0..3,328]` SoA `dataSlice` pre-filtering on large catch-ups over a trusted RPC).
  *
  * Run (from `typescript/`):
  *   SOLANA_RPC_URL="https://your-solana-rpc" pnpm scan
@@ -35,15 +37,19 @@ const fvk = exportFullViewingKey(keys);
 const store = new CompactWalletStore(0, 0n);
 const fetchBatch = createSolanaRpcBatchFetcher(rpcUrl, 'confirmed');
 
+const privacyMode = process.env.AUDREN_PRIVACY_MODE === 'fast' ? 'fast' : 'strict';
 const { pool, lanes, discoveredNotes } = await syncCompactStoreWithRpc({
   store,
   fvk,
   fetchBatch,
+  privacyMode,
 });
 
-console.log('=== Audren Pool #0 Ordinary-RPC Sync (Zero Indexer) ===');
+console.log('=== Audren v1 Pool #0 Ordinary-RPC Sync (Zero Indexer) ===');
 console.log({
   programId: AUDREN_PROGRAM_ID,
+  protocolVersion: pool.version,
+  privacyMode,
   audrenAddress: keys.address,
   activeLanes: pool.activeLanes,
   paused: pool.paused,

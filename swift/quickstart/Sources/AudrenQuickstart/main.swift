@@ -15,7 +15,6 @@ private struct PdaVectors: Decodable {
     let nullifier_hex: String
 }
 private struct AssetIdVectors: Decodable {
-    let native_sol_asset_id_hex: String
     let wsol_asset_id_hex: String
     let usdc_asset_id_hex: String
 }
@@ -23,11 +22,20 @@ private struct MemoVector: Decodable {
     let eph_secret_hex: String
     let amount: UInt64
     let mint_hex: String
+    let payment_id_hex: String
     let commitment_hex: String
-    let memo_90_hex: String
+    let memo_106_hex: String
+    let dyn_eph_secret_hex: String
+}
+private struct CtxHashVectors: Decodable {
+    let transact_private_ctx_hash_hex: String
+    let transact_wsol_unwrap_ctx_hash_hex: String
+    let exec_fee_on_output_ctx_hash_hex: String
 }
 private struct Groth16Vector: Decodable {
     let super_root_hex: String
+    let out0_stealth_owner_hex: String
+    let out1_stealth_owner_hex: String
     let nf0_hex: String
     let nf1_hex: String
     let cm0_hex: String
@@ -48,6 +56,7 @@ private struct ConformanceVectors: Decodable {
     let asset_ids: AssetIdVectors
     let pdas: PdaVectors
     let memo: MemoVector
+    let ctx_hashes: CtxHashVectors
     let groth16: Groth16Vector
     let pool_state: PoolStateVector
     let checkpoint_raw_hex: String
@@ -114,6 +123,7 @@ let sess3 = try deriveDefiSessionKeypair(seed: aliceSeed, sessionIndex: 3)
 let fvk = try exportFullViewingKey(seed: aliceSeed)
 let decodedAddr = try decodeAudrenAddress(encoded: alice.address)
 precondition(dataToHex(decodedAddr[0]) == v.alice.spend_pk_hex)
+precondition(alice.address == v.alice.address)
 
 print("[1/6 KEYS]")
 print("  Program ID    : \(pid) (v\(protocolVersion()))")
@@ -124,7 +134,6 @@ print("  FVK nk        : \(dataToHex(fvk.nk))")
 
 // 2. PDAs & ZERO-COPY LAYOUTS
 let poolPda = try derivePoolPda(programId: pid, poolId: poolId).address
-let solVaultPda = try deriveSolVaultPda(programId: pid, poolId: poolId).address
 let vaultAuthPda = try deriveVaultAuthPda(programId: pid, poolId: poolId).address
 let lane2Pda = try deriveLanePda(programId: pid, poolId: poolId, laneId: 2).address
 let escrow5Pda = try deriveEscrowPda(programId: pid, poolId: poolId, shardId: 5).address
@@ -133,7 +142,6 @@ let ck = try decodeRootCheckpointAccount(data: hexToData(v.checkpoint_raw_hex))
 
 print("[2/6 PDAs & LAYOUTS]")
 print("  Pool #0 PDA   : \(poolPda) (active_lanes=\(ps.activeLanes), ckpt_interval=\(ps.ckptInterval))")
-print("  SOL Vault     : \(solVaultPda)")
 print("  Vault Auth    : \(vaultAuthPda)")
 print("  Lane #2 PDA   : \(lane2Pda)")
 print("  Escrow #5 PDA : \(escrow5Pda)")
@@ -142,18 +150,22 @@ print("  Checkpoint #13: slot_idx=\(ck.slotIdx), lane2_leaves=\(ck.laneCounts[2]
 // 3. MEMOS & ZERO-INDEXER COMPACT STORE
 let amount = v.memo.amount
 let mintBytes = hexToData(v.memo.mint_hex)
+let paymentId = hexToData(v.memo.payment_id_hex)
 let enc = try encryptNoteMemo(
     recipientSpendPk: alice.spendPk,
     recipientViewPk: alice.viewPk,
     ephSecret: hexToData(v.memo.eph_secret_hex),
     amount: amount,
-    mint: mintBytes
+    mint: mintBytes,
+    paymentId: paymentId
 )
+precondition(dataToHex(enc.memo106) == v.memo.memo_106_hex)
 let cmBe = hexToData(v.memo.commitment_hex)
-guard let dec = try decryptAndVerifyMemoEntry(fvk: fvk, memo90: enc.memo90, onchainCommitment: cmBe) else {
+guard let dec = try decryptAndVerifyMemoEntry(fvk: fvk, memo106: enc.memo106, onchainCommitment: cmBe) else {
     fatalError("FVK memo decrypt failed")
 }
 precondition(dec.amount == amount)
+precondition(dec.paymentId == paymentId)
 
 let nfSample = hexToData(v.pdas.nullifier_hex)
 let nfPda = try deriveNullifierPda(programId: pid, poolId: poolId, nullifier: nfSample).address
@@ -162,15 +174,17 @@ let storeJson = try compactStoreNewJson(poolId: poolId, birthdaySlot: 0)
 precondition(!storeJson.isEmpty)
 
 print("[3/6 MEMOS & COMPACT STORE]")
-print("  Memo (90 B)   : \(dataToHex(enc.memo90).prefix(16))... -> decrypted \(dec.amount) lamports (Poseidon verified)")
+print("  Memo (106 B)  : \(dataToHex(enc.memo106).prefix(16))... -> decrypted \(dec.amount) lamports (payment_id=\(dataToHex(dec.paymentId)), Poseidon verified)")
 print("  Nullifier PDA : \(nfPda)")
 print("  Unwrap PDA    : \(unwrapPda)")
 print("  CompactStore  : initialized (pool_id=\(poolId), indexer=none)")
 
 // 4. BN254 GROTH16 & INSTRUCTIONS
-let ctxPriv = try computeJoinsplitCtxHashFfi(params: FfiJoinSplitCtxHashParams(
+let wsolAsset = hexToData(v.asset_ids.wsol_asset_id_hex)
+let ctxPriv = try computeTransactCtxHashFfi(params: FfiTransactCtxHashParams(
     programId: pid,
     poolId: poolId,
+    vkId: 0,
     outLaneId: 2,
     outputMask: 0b111,
     assetMode: 0,
@@ -180,40 +194,44 @@ let ctxPriv = try computeJoinsplitCtxHashFfi(params: FfiJoinSplitCtxHashParams(
     publicAssetId: Data(repeating: 0, count: 32),
     publicAmountOut: 0,
     relayerFeeAmount: 0,
-    memosBytes: enc.memo90
+    memosBytes: enc.memo106
 ))
-let ctxWsol = try computeJoinsplitCtxHashFfi(params: FfiJoinSplitCtxHashParams(
+precondition(dataToHex(ctxPriv) == v.ctx_hashes.transact_private_ctx_hash_hex)
+
+let ctxWsol = try computeTransactCtxHashFfi(params: FfiTransactCtxHashParams(
     programId: pid,
     poolId: poolId,
+    vkId: 0,
     outLaneId: 2,
     outputMask: 0,
-    assetMode: 2,
+    assetMode: 1,
     unwrapWsol: true,
     recipient: sess0.pubkeyB58,
     relayerFeeRecipient: sess3.pubkeyB58,
-    publicAssetId: hexToData(v.asset_ids.wsol_asset_id_hex),
+    publicAssetId: wsolAsset,
     publicAmountOut: 1_000_000_000,
     relayerFeeAmount: 5_000_000,
     memosBytes: Data()
 ))
+precondition(dataToHex(ctxWsol) == v.ctx_hashes.transact_wsol_unwrap_ctx_hash_hex)
+
 let dynM = try prepareDynamicSwapMemo(
     recipientViewPk: hexToData(v.bob.view_pk_hex),
-    ephSecret: Data(repeating: 0x44, count: 32)
+    ephSecret: hexToData(v.memo.dyn_eph_secret_hex)
 )
 let ctxExec = try computeExecCtxHashFfi(params: FfiExecCtxHashParams(
     programId: pid,
     poolId: poolId,
+    vkId: 0,
     outLaneId: 1,
     escrowShard: 3,
     changeMask: 0b01,
-    inKind: 1,
-    outKind: 0,
     feeOnOutput: true,
     assetIn: hexToData(v.asset_ids.usdc_asset_id_hex),
     amountIn: 50_000_000,
     relayerFeeAmount: 2_000_000,
     relayerFeeRecipient: sess3.pubkeyB58,
-    assetOut: hexToData(v.asset_ids.native_sol_asset_id_hex),
+    assetOut: wsolAsset,
     minAmountOut: 400_000_000,
     routerProg: base58Encode32(0x77),
     routerAccounts: [
@@ -223,10 +241,11 @@ let ctxExec = try computeExecCtxHashFfi(params: FfiExecCtxHashParams(
     outStealthOwner: enc.stealthOwner,
     outBlinding: enc.blinding,
     dynMemoHead: dynM.dynHead34,
-    dynMask56: dynM.dynMask56,
+    dynMask72: dynM.dynMask72,
     routerIxData: Data([1, 2, 3, 4]),
-    changeMemos: enc.memo90
+    changeMemos: enc.memo106
 ))
+precondition(dataToHex(ctxExec) == v.ctx_hashes.exec_fee_on_output_ctx_hash_hex)
 
 // Real 192-byte BN254 Groth16 proof via native UniFFI `proveJoinsplitWitnessBytes`
 let zeroHashes = [
@@ -259,10 +278,9 @@ func u64Be32(_ x: UInt64) -> Data {
     var be = x.bigEndian
     return Data(repeating: 0, count: 24) + Data(bytes: &be, count: 8)
 }
-let solAsset = hexToData(v.asset_ids.native_sol_asset_id_hex)
 var witness = Data(capacity: 4611)
 witness.append(hexToData(v.groth16.super_root_hex))
-witness.append(solAsset)
+witness.append(wsolAsset)
 witness.append(Data(repeating: 0, count: 32))
 witness.append(u64Le(0))
 witness.append(u64Le(0))
@@ -272,7 +290,7 @@ witness.append(1) // omit_nf1 = true
 // Input 0: real note at lane 2, leaf 5
 witness.append(alice.spendSk)
 witness.append(enc.tweak)
-witness.append(solAsset)
+witness.append(wsolAsset)
 witness.append(u64Le(amount))
 witness.append(enc.blinding)
 witness.append(0) // is_dummy = false
@@ -291,25 +309,25 @@ for zh in zeroHashes {
 // Input 1: dummy
 witness.append(alice.spendSk)
 witness.append(Data(repeating: 0, count: 32))
-witness.append(solAsset)
+witness.append(wsolAsset)
 witness.append(u64Le(0))
 witness.append(u64Be32(0x5555))
 witness.append(1) // is_dummy = true
 witness.append(Data(repeating: 0, count: 20 + 20 * 3 * 32))
 
 // Outputs 0, 1, 2
-witness.append(hexToData("297407e33a8667d5d8235b00a22b34f66113f3d1b9c5486704f12647a0ee1041"))
-witness.append(solAsset)
+witness.append(hexToData(v.groth16.out0_stealth_owner_hex))
+witness.append(wsolAsset)
 witness.append(u64Le(1_000_000))
 witness.append(u64Be32(0x201))
 
-witness.append(hexToData("20944e988ecb9bf1ad2edbbc8b782ff1695fcd197058948fdf9ef6426fa55528"))
-witness.append(solAsset)
+witness.append(hexToData(v.groth16.out1_stealth_owner_hex))
+witness.append(wsolAsset)
 witness.append(u64Le(500_000))
 witness.append(u64Be32(0x202))
 
 witness.append(Data(repeating: 0, count: 32))
-witness.append(solAsset)
+witness.append(wsolAsset)
 witness.append(u64Le(0))
 witness.append(u64Be32(0x203))
 precondition(witness.count == 4611)
@@ -319,22 +337,31 @@ precondition(dataToHex(proved.proof192) == v.groth16.proof_192_hex)
 precondition(dataToHex(proved.nf0) == v.groth16.nf0_hex)
 precondition(dataToHex(proved.publicInputHash) == v.groth16.public_input_hash_hex)
 
-let depIx = try buildDepositSolIx(params: FfiDepositSolParams(
+let vaultWsolAta = try deriveAta(owner: vaultAuthPda, tokenProgram: classicTokenProg, mint: wsolMint)
+let depIx = try buildDepositIx(params: FfiDepositParams(
     programId: pid,
     depositor: sess0.pubkeyB58,
     poolId: poolId,
+    mint: wsolMint,
+    sourceAccount: sess0.pubkeyB58,
+    vaultAta: vaultWsolAta,
+    tokenProg: classicTokenProg,
     laneId: 2,
     subPageSeq: 7,
     rootPageSeq: 7,
     memoPageSeq: 7,
+    nextSubSeq: nil,
+    nextMemoSeq: nil,
+    nativeSol: true,
     feeFromAmount: true,
     amount: amount,
     stealthOwner: enc.stealthOwner,
     blinding: enc.blinding,
-    memo90: enc.memo90
+    memo106: enc.memo106,
+    transferHookAccounts: []
 ))
 let proof192 = proved.proof192
-let jsIx = try buildJoinsplitIx(params: FfiJoinSplitParams(
+let txIx = try buildTransactIx(params: FfiTransactParams(
     programId: pid,
     payer: sess0.pubkeyB58,
     poolId: poolId,
@@ -345,12 +372,15 @@ let jsIx = try buildJoinsplitIx(params: FfiJoinSplitParams(
     outRootSeq: 7,
     outMemoSeq: 7,
     outNfSeq: 7,
+    nextSubSeq: nil,
+    nextMemoSeq: nil,
+    nextNfSeq: nil,
     outputMask: 0b111,
     assetMode: 0,
     unwrapWsol: false,
-    splMint: nil,
-    splVaultAta: nil,
-    splTokenProg: nil,
+    publicMint: nil,
+    publicVaultAta: nil,
+    publicTokenProg: nil,
     proof192: proof192,
     nf0: proved.nf0,
     nf1: proved.nf1,
@@ -361,12 +391,13 @@ let jsIx = try buildJoinsplitIx(params: FfiJoinSplitParams(
     relayerFeeAmount: 0,
     recipient: systemProgramId,
     relayerFeeRecipient: systemProgramId,
-    memosBytes: enc.memo90
+    memosBytes: enc.memo106,
+    transferHookAccounts: []
 ))
 
 print("[4/6 INSTRUCTIONS & GROTH16]")
-print("  DepositSol    : \(depIx.data.count) B (tag=\(depIx.data[0]), fee_from_amount=true)")
-print("  JoinSplit     : \(jsIx.data.count) B (tag=\(jsIx.data[0]), proof=\(proof192.count) B Groth16, 1 Tx v1)")
+print("  Deposit       : \(depIx.data.count) B (tag=\(depIx.data[0]), native_sol=true, fee_from_amount=true)")
+print("  Transact      : \(txIx.data.count) B (tag=\(txIx.data[0]), proof=\(proof192.count) B Groth16, 1 Tx v1)")
 print("  ctx_hash priv : \(dataToHex(ctxPriv))")
 print("  ctx_hash wsol : \(dataToHex(ctxWsol))")
 print("  ctx_hash exec : \(dataToHex(ctxExec))")

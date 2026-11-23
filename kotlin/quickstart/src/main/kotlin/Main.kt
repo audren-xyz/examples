@@ -49,6 +49,7 @@ fun main() {
     val fvk = exportFullViewingKey(aliceSeed)
     val decodedAddr = decodeAudrenAddress(alice.address)
     check(bytesToHex(decodedAddr[0]) == aliceJson.getString("spend_pk_hex"))
+    check(alice.address == aliceJson.getString("address"))
 
     println("[1/6 KEYS]")
     println("  Program ID    : $pid (v${protocolVersion()})")
@@ -59,7 +60,6 @@ fun main() {
 
     // 2. PDAs & ZERO-COPY LAYOUTS
     val poolPda = derivePoolPda(pid, poolId).address
-    val solVaultPda = deriveSolVaultPda(pid, poolId).address
     val vaultAuthPda = deriveVaultAuthPda(pid, poolId).address
     val lane2Pda = deriveLanePda(pid, poolId, 2u).address
     val escrow5Pda = deriveEscrowPda(pid, poolId, 5u).address
@@ -68,7 +68,6 @@ fun main() {
 
     println("[2/6 PDAs & LAYOUTS]")
     println("  Pool #0 PDA   : $poolPda (active_lanes=${ps.activeLanes}, ckpt_interval=${ps.ckptInterval})")
-    println("  SOL Vault     : $solVaultPda")
     println("  Vault Auth    : $vaultAuthPda")
     println("  Lane #2 PDA   : $lane2Pda")
     println("  Escrow #5 PDA : $escrow5Pda")
@@ -78,17 +77,21 @@ fun main() {
     val memoJson = v.getJSONObject("memo")
     val amount = memoJson.getLong("amount").toULong()
     val mintBytes = hexToBytes(memoJson.getString("mint_hex"))
+    val paymentId = hexToBytes(memoJson.getString("payment_id_hex"))
     val enc = encryptNoteMemo(
         alice.spendPk,
         alice.viewPk,
         hexToBytes(memoJson.getString("eph_secret_hex")),
         amount,
-        mintBytes
+        mintBytes,
+        paymentId
     )
+    check(bytesToHex(enc.memo106) == memoJson.getString("memo_106_hex"))
     val cmBe = hexToBytes(memoJson.getString("commitment_hex"))
-    val dec = decryptAndVerifyMemoEntry(fvk, enc.memo90, cmBe)
+    val dec = decryptAndVerifyMemoEntry(fvk, enc.memo106, cmBe)
         ?: error("FVK memo decrypt failed")
     check(dec.amount == amount)
+    check(bytesToHex(dec.paymentId) == memoJson.getString("payment_id_hex"))
 
     val nfSample = hexToBytes(v.getJSONObject("pdas").getString("nullifier_hex"))
     val nfPda = deriveNullifierPda(pid, poolId, nfSample).address
@@ -97,17 +100,20 @@ fun main() {
     check(storeJson.isNotEmpty())
 
     println("[3/6 MEMOS & COMPACT STORE]")
-    println("  Memo (90 B)   : ${bytesToHex(enc.memo90).substring(0, 16)}... -> decrypted ${dec.amount} lamports (Poseidon verified)")
+    println("  Memo (106 B)  : ${bytesToHex(enc.memo106).substring(0, 16)}... -> decrypted ${dec.amount} lamports (payment_id=${bytesToHex(dec.paymentId)}, Poseidon verified)")
     println("  Nullifier PDA : $nfPda")
     println("  Unwrap PDA    : $unwrapPda")
     println("  CompactStore  : initialized (pool_id=$poolId, indexer=none)")
 
     // 4. BN254 GROTH16 & INSTRUCTIONS
     val assetIds = v.getJSONObject("asset_ids")
-    val ctxPriv = computeJoinsplitCtxHashFfi(
-        FfiJoinSplitCtxHashParams(
+    val ctxHashes = v.getJSONObject("ctx_hashes")
+    val wsolAsset = hexToBytes(assetIds.getString("wsol_asset_id_hex"))
+    val ctxPriv = computeTransactCtxHashFfi(
+        FfiTransactCtxHashParams(
             programId = pid,
             poolId = poolId,
+            vkId = 0u,
             outLaneId = 2u,
             outputMask = 7u,
             assetMode = 0u,
@@ -117,44 +123,48 @@ fun main() {
             publicAssetId = ByteArray(32),
             publicAmountOut = 0uL,
             relayerFeeAmount = 0uL,
-            memosBytes = enc.memo90
+            memosBytes = enc.memo106
         )
     )
-    val ctxWsol = computeJoinsplitCtxHashFfi(
-        FfiJoinSplitCtxHashParams(
+    check(bytesToHex(ctxPriv) == ctxHashes.getString("transact_private_ctx_hash_hex"))
+
+    val ctxWsol = computeTransactCtxHashFfi(
+        FfiTransactCtxHashParams(
             programId = pid,
             poolId = poolId,
+            vkId = 0u,
             outLaneId = 2u,
             outputMask = 0u,
-            assetMode = 2u,
+            assetMode = 1u,
             unwrapWsol = true,
             recipient = sess0.pubkeyB58,
             relayerFeeRecipient = sess3.pubkeyB58,
-            publicAssetId = hexToBytes(assetIds.getString("wsol_asset_id_hex")),
+            publicAssetId = wsolAsset,
             publicAmountOut = 1_000_000_000uL,
             relayerFeeAmount = 5_000_000uL,
             memosBytes = ByteArray(0)
         )
     )
+    check(bytesToHex(ctxWsol) == ctxHashes.getString("transact_wsol_unwrap_ctx_hash_hex"))
+
     val dynM = prepareDynamicSwapMemo(
         hexToBytes(v.getJSONObject("bob").getString("view_pk_hex")),
-        ByteArray(32) { 0x44 }
+        hexToBytes(memoJson.getString("dyn_eph_secret_hex"))
     )
     val ctxExec = computeExecCtxHashFfi(
         FfiExecCtxHashParams(
             programId = pid,
             poolId = poolId,
+            vkId = 0u,
             outLaneId = 1u,
             escrowShard = 3u,
             changeMask = 1u,
-            inKind = 1u,
-            outKind = 0u,
             feeOnOutput = true,
             assetIn = hexToBytes(assetIds.getString("usdc_asset_id_hex")),
             amountIn = 50_000_000uL,
             relayerFeeAmount = 2_000_000uL,
             relayerFeeRecipient = sess3.pubkeyB58,
-            assetOut = hexToBytes(assetIds.getString("native_sol_asset_id_hex")),
+            assetOut = wsolAsset,
             minAmountOut = 400_000_000uL,
             routerProg = base58Encode32(0x77),
             routerAccounts = listOf(
@@ -164,11 +174,12 @@ fun main() {
             outStealthOwner = enc.stealthOwner,
             outBlinding = enc.blinding,
             dynMemoHead = dynM.dynHead34,
-            dynMask56 = dynM.dynMask56,
+            dynMask72 = dynM.dynMask72,
             routerIxData = byteArrayOf(1, 2, 3, 4),
-            changeMemos = enc.memo90
+            changeMemos = enc.memo106
         )
     )
+    check(bytesToHex(ctxExec) == ctxHashes.getString("exec_fee_on_output_ctx_hash_hex"))
 
     // Real 192-byte BN254 Groth16 proof via native UniFFI `proveJoinsplitWitnessBytes`
     val zeroHashes = listOf(
@@ -198,10 +209,9 @@ fun main() {
         for (i in 0 until 8) b[24 + i] = ((x ushr ((7 - i) * 8)) and 0xff).toByte()
     }
     val g16 = v.getJSONObject("groth16")
-    val solAsset = hexToBytes(assetIds.getString("native_sol_asset_id_hex"))
     val w = java.io.ByteArrayOutputStream(4611)
     w.write(hexToBytes(g16.getString("super_root_hex")))
-    w.write(solAsset)
+    w.write(wsolAsset)
     w.write(ByteArray(32))
     w.write(u64Le(0L))
     w.write(u64Le(0L))
@@ -211,7 +221,7 @@ fun main() {
     // Input 0: real note at lane 2, leaf 5
     w.write(alice.spendSk)
     w.write(enc.tweak)
-    w.write(solAsset)
+    w.write(wsolAsset)
     w.write(u64Le(memoJson.getLong("amount")))
     w.write(enc.blinding)
     w.write(0) // is_dummy = false
@@ -228,25 +238,25 @@ fun main() {
     // Input 1: dummy
     w.write(alice.spendSk)
     w.write(ByteArray(32))
-    w.write(solAsset)
+    w.write(wsolAsset)
     w.write(u64Le(0L))
     w.write(u64Be32(0x5555L))
     w.write(1) // is_dummy = true
     w.write(ByteArray(20 + 20 * 3 * 32))
 
     // Outputs 0, 1, 2
-    w.write(hexToBytes("297407e33a8667d5d8235b00a22b34f66113f3d1b9c5486704f12647a0ee1041"))
-    w.write(solAsset)
+    w.write(hexToBytes(g16.getString("out0_stealth_owner_hex")))
+    w.write(wsolAsset)
     w.write(u64Le(1_000_000L))
     w.write(u64Be32(0x201L))
 
-    w.write(hexToBytes("20944e988ecb9bf1ad2edbbc8b782ff1695fcd197058948fdf9ef6426fa55528"))
-    w.write(solAsset)
+    w.write(hexToBytes(g16.getString("out1_stealth_owner_hex")))
+    w.write(wsolAsset)
     w.write(u64Le(500_000L))
     w.write(u64Be32(0x202L))
 
     w.write(ByteArray(32))
-    w.write(solAsset)
+    w.write(wsolAsset)
     w.write(u64Le(0L))
     w.write(u64Be32(0x203L))
 
@@ -257,25 +267,34 @@ fun main() {
     check(bytesToHex(proved.nf0) == g16.getString("nf0_hex"))
     check(bytesToHex(proved.publicInputHash) == g16.getString("public_input_hash_hex"))
 
-    val depIx = buildDepositSolIx(
-        FfiDepositSolParams(
+    val vaultWsolAta = deriveAta(vaultAuthPda, CLASSIC_TOKEN_PROGRAM, WSOL_MINT)
+    val depIx = buildDepositIx(
+        FfiDepositParams(
             programId = pid,
             depositor = sess0.pubkeyB58,
             poolId = poolId,
+            mint = WSOL_MINT,
+            sourceAccount = sess0.pubkeyB58,
+            vaultAta = vaultWsolAta,
+            tokenProg = CLASSIC_TOKEN_PROGRAM,
             laneId = 2u,
             subPageSeq = 7uL,
             rootPageSeq = 7uL,
             memoPageSeq = 7uL,
+            nextSubSeq = null,
+            nextMemoSeq = null,
+            nativeSol = true,
             feeFromAmount = true,
             amount = amount,
             stealthOwner = enc.stealthOwner,
             blinding = enc.blinding,
-            memo90 = enc.memo90
+            memo106 = enc.memo106,
+            transferHookAccounts = emptyList()
         )
     )
     val proof192 = proved.proof192
-    val jsIx = buildJoinsplitIx(
-        FfiJoinSplitParams(
+    val txIx = buildTransactIx(
+        FfiTransactParams(
             programId = pid,
             payer = sess0.pubkeyB58,
             poolId = poolId,
@@ -286,12 +305,15 @@ fun main() {
             outRootSeq = 7uL,
             outMemoSeq = 7uL,
             outNfSeq = 7uL,
+            nextSubSeq = null,
+            nextMemoSeq = null,
+            nextNfSeq = null,
             outputMask = 7u,
             assetMode = 0u,
             unwrapWsol = false,
-            splMint = null,
-            splVaultAta = null,
-            splTokenProg = null,
+            publicMint = null,
+            publicVaultAta = null,
+            publicTokenProg = null,
             proof192 = proof192,
             nf0 = proved.nf0,
             nf1 = proved.nf1,
@@ -302,13 +324,14 @@ fun main() {
             relayerFeeAmount = 0uL,
             recipient = SYSTEM_PROGRAM_ID,
             relayerFeeRecipient = SYSTEM_PROGRAM_ID,
-            memosBytes = enc.memo90
+            memosBytes = enc.memo106,
+            transferHookAccounts = emptyList()
         )
     )
 
     println("[4/6 INSTRUCTIONS & GROTH16]")
-    println("  DepositSol    : ${depIx.data.size} B (tag=${depIx.data[0].toInt() and 0xff}, fee_from_amount=true)")
-    println("  JoinSplit     : ${jsIx.data.size} B (tag=${jsIx.data[0].toInt() and 0xff}, proof=${proof192.size} B Groth16, 1 Tx v1)")
+    println("  Deposit       : ${depIx.data.size} B (tag=${depIx.data[0].toInt() and 0xff}, native_sol=true, fee_from_amount=true)")
+    println("  Transact      : ${txIx.data.size} B (tag=${txIx.data[0].toInt() and 0xff}, proof=${proof192.size} B Groth16, 1 Tx v1)")
     println("  ctx_hash priv : ${bytesToHex(ctxPriv)}")
     println("  ctx_hash wsol : ${bytesToHex(ctxWsol)}")
     println("  ctx_hash exec : ${bytesToHex(ctxExec)}")
