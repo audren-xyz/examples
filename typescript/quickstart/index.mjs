@@ -16,9 +16,11 @@ import {
   AUDREN_PROGRAM_ID,
   CLASSIC_TOKEN_PROGRAM_ID,
   CompactWalletStore,
+  DEFAULT_ROOT_EPOCH_INTERVAL,
   JUPITER_CPI_EXCLUDED_DEXES,
   NUM_LANES,
   PROTOCOL_VERSION,
+  ROOT_RING_EPOCH,
   SYSTEM_PROGRAM_ID,
   VK_ID_DEFAULT,
   WSOL_MINT,
@@ -27,13 +29,14 @@ import {
   base58Encode,
   buildDepositInstruction,
   buildHistoricalWitness4Ary,
+  buildInitRootHistoryInstruction,
   buildTransactInstruction,
   computeExecCtxHash,
   computeSubtree256Root,
   computeSuperRoot4Ary,
   computeTransactCtxHash,
+  decodeGlobalRootHistory,
   decodePoolState,
-  decodeRootCheckpoint,
   deriveAssetId,
   deriveAssociatedTokenAddressSync,
   deriveDefiSessionKeypair,
@@ -42,6 +45,7 @@ import {
   deriveLanePdaSync,
   deriveNullifierPdaSync,
   derivePoolPdaSync,
+  deriveRootsPdaSync,
   deriveStealthOwner,
   deriveSubaccountKeys,
   deriveUnwrapPdaSync,
@@ -92,22 +96,24 @@ console.log(`  FVK nk        : ${toHex(fvk.nk)}`);
 
 // 2. PDAs & ZERO-COPY LAYOUTS
 const poolPda = derivePoolPdaSync(poolId).address;
+const rootsPda = deriveRootsPdaSync(poolId).address;
 const vaultAuthPda = deriveVaultAuthPdaSync(poolId).address;
 const lane2Pda = deriveLanePdaSync(poolId, 2).address;
 const escrow5Pda = deriveEscrowPdaSync(poolId, 5).address;
+assert.equal(rootsPda, v.pdas.roots.address);
 const poolState = decodePoolState(fromHex(v.pool_state.raw_hex));
-const ckpt = decodeRootCheckpoint(fromHex(v.checkpoint_raw_hex));
+const roots = decodeGlobalRootHistory(fromHex(v.root_history.raw_hex));
 
 console.log('[2/6 PDAs & LAYOUTS]');
 console.log(
-  `  Pool #0 PDA   : ${poolPda} (active_lanes=${poolState.activeLanes}, ckpt_interval=${poolState.ckptInterval})`,
+  `  Pool #0 PDA   : ${poolPda} (active_lanes=${poolState.activeLanes}, root_epoch_interval=${poolState.rootEpochInterval})`,
+);
+console.log(
+  `  Roots PDA     : ${rootsPda} (slot_cursor=${roots.slotCursor}, epoch_cursor=${roots.epochCursor}, lane2_leaves=${roots.stableLaneCounts[2]}, super_root=${toHex(roots.stableSuperRoot)})`,
 );
 console.log(`  Vault Auth    : ${vaultAuthPda}`);
 console.log(`  Lane #2 PDA   : ${lane2Pda}`);
 console.log(`  Escrow #5 PDA : ${escrow5Pda}`);
-console.log(
-  `  Checkpoint #13: slot_idx=${ckpt.slotIdx}, lane2_leaves=${ckpt.laneCounts[2]}, super_root=${toHex(ckpt.superRoot)}`,
-);
 
 // 3. MEMOS & ZERO-INDEXER COMPACT STORE
 const ephSec = fromHex(v.memo.eph_secret_hex);
@@ -191,6 +197,7 @@ const ctxExec = computeExecCtxHash({
     { pubkey: base58Encode(new Uint8Array(32).fill(0x88)), isSigner: false, isWritable: true },
     { pubkey: base58Encode(new Uint8Array(32).fill(0x99)), isSigner: false, isWritable: false },
   ],
+  extraWritablePubkeys: [],
   outStealthOwner: frToBeBytes(stealth),
   outBlinding: frToBeBytes(blinding),
   dynMemoHead: dynM.dynHead34,
@@ -212,8 +219,8 @@ const superRoot = computeSuperRoot4Ary(laneRoots);
 const path5 = buildHistoricalWitness4Ary({
   laneId: 2,
   targetLeafIdx: 5n,
-  ckptLaneRoots: laneRoots,
-  ckptLaneLeafCount: 6n,
+  laneRoots,
+  laneLeafCount: 6n,
   finalizedSubtreeRoots: [],
   targetPageLeaves: leaves,
   frontierPageLeaves: leaves,
@@ -275,17 +282,25 @@ const depIx = buildDepositInstruction({
   blinding,
   memo,
 });
+const initRootsIx = buildInitRootHistoryInstruction({
+  authority: sess0.pubkeyBase58,
+  poolId,
+  rootEpochInterval: DEFAULT_ROOT_EPOCH_INTERVAL,
+  activeLanes: 4,
+});
+const rootRingIdx = roots.epochCursor;
 const txIx = buildTransactInstruction({
   payer: sess0.pubkeyBase58,
   poolId,
   vkId: VK_ID_DEFAULT,
-  ckptSlotIdx: 13,
+  rootRingKind: ROOT_RING_EPOCH,
+  rootRingIdx,
   outLaneId: 2,
   outSubSeq: 7n,
   outRootSeq: 7n,
   outMemoSeq: 7n,
   outNfSeq: 7n,
-  outputMask: 0b111,
+  outputMask: 0b001,
   assetMode: ASSET_MODE_PRIVATE,
   unwrapWsol: false,
   proof192: proved.proof192,
@@ -306,7 +321,10 @@ console.log(
   `  Deposit       : ${depIx.data.length} B (tag=${depIx.data[0]}, native_sol=true, fee_from_amount=true)`,
 );
 console.log(
-  `  Transact      : ${txIx.data.length} B (tag=${txIx.data[0]}, proof=${proved.proof192.length} B Groth16, 1 Tx v1)`,
+  `  InitRootHist  : ${initRootsIx.data.length} B (tag=${initRootsIx.data[0]}, root_epoch_interval=${DEFAULT_ROOT_EPOCH_INTERVAL}, active_lanes=4)`,
+);
+console.log(
+  `  Transact      : ${txIx.data.length} B (tag=${txIx.data[0]}, ring=${ROOT_RING_EPOCH}:${rootRingIdx}, proof=${proved.proof192.length} B Groth16, 1 Tx v1)`,
 );
 console.log(`  ctx_hash priv : ${toHex(frToBeBytes(ctxPriv))}`);
 console.log(`  ctx_hash wsol : ${toHex(frToBeBytes(ctxWsol))}`);

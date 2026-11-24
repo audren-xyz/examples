@@ -20,11 +20,12 @@ use audren_client::{
     audren_core::{
         instruction::{ASSET_MODE_PRIVATE, ASSET_MODE_PUBLIC, VK_ID_DEFAULT},
         layout::{MEMO_CT_LEN, MEMO_ENTRY_WIRE_LEN, MEMO_PAYMENT_ID_LEN},
-        AUDREN_PROGRAM_ID, CLASSIC_TOKEN_PROGRAM_ID, NUM_LANES, PROTOCOL_VERSION, WSOL_MINT,
+        AUDREN_PROGRAM_ID, CLASSIC_TOKEN_PROGRAM_ID, DEFAULT_ROOT_EPOCH_INTERVAL, NUM_LANES,
+        PROTOCOL_VERSION, ROOT_RING_EPOCH, WSOL_MINT,
     },
     instructions::{
-        build_deposit, build_transact, compute_exec_ctx_hash, compute_transact_ctx_hash,
-        AudrenAccountMeta,
+        build_deposit, build_init_root_history, build_transact, compute_exec_ctx_hash,
+        compute_transact_ctx_hash, AudrenAccountMeta,
     },
     keys::{
         encrypt_note_memo_with_payment_id, prepare_dynamic_swap_memo,
@@ -32,11 +33,11 @@ use audren_client::{
     },
     pda::{
         derive_ata, derive_escrow_pda, derive_lane_pda, derive_nullifier_pda, derive_pool_pda,
-        derive_unwrap_pda, derive_vault_auth_pda,
+        derive_roots_pda, derive_unwrap_pda, derive_vault_auth_pda,
     },
     prover::AudrenProver,
     router::{DEFAULT_RELAY_URL, JUPITER_CPI_EXCLUDED_DEXES},
-    scanner::{decode_pool_state, decode_root_checkpoint},
+    scanner::{decode_global_root_history, decode_pool_state},
     store::CompactWalletStore,
 };
 use solana_address::Address;
@@ -98,7 +99,7 @@ fn main() {
     let sess0_addr = Address::new_from_array(sess0.pubkey);
     let sess3_addr = Address::new_from_array(sess3.pubkey);
     let fvk = alice.full_viewing_key();
-    let alice_addr_str = alice.address().encode();
+    let alice_addr_str = alice.address().encode().expect("encode valid aud1 address");
     let parsed = AudrenAddress::decode(&alice_addr_str).unwrap();
     assert_eq!(parsed.spend_pk, fr_to_be_bytes(&alice.spend_pk));
     assert_eq!(alice_addr_str, v["alice"]["address"].as_str().unwrap());
@@ -106,34 +107,48 @@ fn main() {
     println!("[1/6 KEYS]");
     println!("  Program ID    : {program_id} (v{PROTOCOL_VERSION})");
     println!("  Alice aud1    : {alice_addr_str}");
-    println!("  Subaccount #1 : {}", alice_sub1.address().encode());
+    println!(
+        "  Subaccount #1 : {}",
+        alice_sub1
+            .address()
+            .encode()
+            .expect("encode valid subaccount aud1 address")
+    );
     println!("  DeFi Session 0: {sess0_addr}");
     println!("  FVK nk        : {}", to_hex(&fvk.nk));
 
     // 2. PDAs & ZERO-COPY LAYOUTS
     let (pool_pda, _) = derive_pool_pda(&program_id, pool_id);
+    let (roots_pda, _) = derive_roots_pda(&program_id, pool_id);
     let (vault_auth_pda, _) = derive_vault_auth_pda(&program_id, pool_id);
     let (lane2_pda, _) = derive_lane_pda(&program_id, pool_id, 2);
     let (escrow5_pda, _) = derive_escrow_pda(&program_id, pool_id, 5);
+    assert_eq!(
+        roots_pda.to_string(),
+        v["pdas"]["roots"]["address"].as_str().unwrap()
+    );
     let pool_state = decode_pool_state(&decode_hex(v["pool_state"]["raw_hex"].as_str().unwrap()))
         .expect("decode PoolState");
-    let ckpt = decode_root_checkpoint(&decode_hex(v["checkpoint_raw_hex"].as_str().unwrap()))
-        .expect("decode RootCheckpoint");
+    let roots = decode_global_root_history(&decode_hex(
+        v["root_history"]["raw_hex"].as_str().unwrap(),
+    ))
+    .expect("decode GlobalRootHistory");
 
     println!("[2/6 PDAs & LAYOUTS]");
     println!(
-        "  Pool #0 PDA   : {pool_pda} (active_lanes={}, ckpt_interval={})",
-        pool_state.active_lanes, pool_state.ckpt_interval
+        "  Pool #0 PDA   : {pool_pda} (active_lanes={}, root_epoch_interval={})",
+        pool_state.active_lanes, pool_state.root_epoch_interval
+    );
+    println!(
+        "  Roots PDA     : {roots_pda} (slot_cursor={}, epoch_cursor={}, lane2_leaves={}, super_root={})",
+        roots.slot_cursor,
+        roots.epoch_cursor,
+        roots.stable_lane_counts[2],
+        to_hex(&roots.stable_super_root)
     );
     println!("  Vault Auth    : {vault_auth_pda}");
     println!("  Lane #2 PDA   : {lane2_pda}");
     println!("  Escrow #5 PDA : {escrow5_pda}");
-    println!(
-        "  Checkpoint #13: slot_idx={}, lane2_leaves={}, super_root={}",
-        ckpt.slot_idx,
-        ckpt.lane_counts[2],
-        to_hex(&ckpt.super_root)
-    );
 
     // 3. MEMOS & ZERO-INDEXER COMPACT STORE
     let eph_sec = decode_hex_arr::<32>(v["memo"]["eph_secret_hex"].as_str().unwrap());
@@ -247,6 +262,7 @@ fn main() {
             AudrenAccountMeta::writable(Address::new_from_array([0x88u8; 32]), false),
             AudrenAccountMeta::readonly(Address::new_from_array([0x99u8; 32]), false),
         ],
+        &[],
         &fr_to_be_bytes(&stealth),
         &fr_to_be_bytes(&blinding),
         &dyn_head,
@@ -353,18 +369,27 @@ fn main() {
         &memo_106,
         &[],
     );
+    let init_roots_ix = build_init_root_history(
+        program_id,
+        sess0_addr,
+        pool_id,
+        DEFAULT_ROOT_EPOCH_INTERVAL,
+        4,
+    );
+    let root_ring_idx = roots.epoch_cursor as u8;
     let tx_ix = build_transact(
         program_id,
         sess0_addr,
         pool_id,
         VK_ID_DEFAULT,
-        13,
+        ROOT_RING_EPOCH,
+        root_ring_idx,
         2,
         7,
         7,
         7,
         7,
-        0b111,
+        0b001,
         ASSET_MODE_PRIVATE,
         false,
         None,
@@ -390,9 +415,17 @@ fn main() {
         dep_ix.data[0]
     );
     println!(
-        "  Transact      : {} B (tag={}, proof={} B Groth16, 1 Tx v1)",
+        "  InitRootHist  : {} B (tag={}, root_epoch_interval={}, active_lanes=4)",
+        init_roots_ix.data.len(),
+        init_roots_ix.data[0],
+        DEFAULT_ROOT_EPOCH_INTERVAL
+    );
+    println!(
+        "  Transact      : {} B (tag={}, ring={}:{}, proof={} B Groth16, 1 Tx v1)",
         tx_ix.data.len(),
         tx_ix.data[0],
+        ROOT_RING_EPOCH,
+        root_ring_idx,
         proved.proof_192.len()
     );
     println!("  ctx_hash priv : {}", to_hex(&fr_to_be_bytes(&ctx_priv)));

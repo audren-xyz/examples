@@ -1,8 +1,10 @@
 /**
- * Audren v1 Example — Isolated Escrow Account Mapping for `ExecViaEscrow` (`Tag 6`) using `@audren/sdk`.
+ * Audren v1.3.0 Example — Isolated Escrow Account Mapping for `ExecViaEscrow` (`Tag 6`) using `@audren/sdk`.
  *
- * Derives canonical Pool #0 `audren_escrow` shard 0 PDA & Classic SPL ATAs, maps router accounts
- * cleanly with zero outer signers (Audren signs via `invoke_signed`), and prints synced `JUPITER_CPI_EXCLUDED_DEXES`.
+ * Derives canonical Pool #0 `audren_roots` (`GlobalRootHistory`) and `audren_escrow` shard 0 PDA &
+ * Classic SPL ATAs, maps router accounts cleanly with zero outer signers (Audren signs via
+ * `invoke_signed`), computes calibrated tight Compute Unit budgets via
+ * `recommendedExecViaEscrowCuLimit`, and prints synced `JUPITER_CPI_EXCLUDED_DEXES`.
  *
  * Run (from `typescript/`):
  *   pnpm swap-plan                  # offline escrow-account planning
@@ -19,11 +21,14 @@ import {
   WSOL_MINT,
   deriveAssociatedTokenAddressSync,
   deriveEscrowPdaSync,
+  deriveRootsPdaSync,
   prepareEscrowAccounts,
+  recommendedExecViaEscrowCuLimit,
 } from '@audren/sdk';
 
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
+const { address: rootsPda } = deriveRootsPdaSync(0);
 const { address: escrowShard0 } = deriveEscrowPdaSync(0, 0);
 const { address: escrowUsdcAta } = deriveAssociatedTokenAddressSync(
   escrowShard0,
@@ -68,9 +73,11 @@ if (process.env.LIVE_QUOTE === '1') {
   assert.equal(outerSigners, 0);
   console.log('Live ExecViaEscrow route verified via @audren/sdk:', {
     provider,
+    rootsPda,
     escrowPda: prepared.escrowPda,
     outerRouterAccountCount: prepared.accounts.length,
     outerSigners,
+    recommendedCuLimit: recommendedExecViaEscrowCuLimit({ routerCuLimit: 600_000 }),
     excludedDexesCount: JUPITER_CPI_EXCLUDED_DEXES.length,
   });
 } else {
@@ -94,6 +101,7 @@ if (process.env.LIVE_QUOTE === '1') {
   console.log('Offline ExecViaEscrow (Tag 6) account mapping via @audren/sdk:');
   console.log({
     audrenProgramId: AUDREN_PROGRAM_ID,
+    rootsPda,
     escrowPda: prepared.escrowPda,
     escrowInAta: prepared.escrowInAta,
     escrowOutAta: prepared.escrowOutAta,
@@ -102,6 +110,7 @@ if (process.env.LIVE_QUOTE === '1') {
     escrowOutIdx: prepared.escrowOutIdx,
     outerRouterAccountCount: prepared.accounts.length,
     outerSigners,
+    recommendedCuLimit: recommendedExecViaEscrowCuLimit({ routerCuLimit: 600_000 }),
     excludedDexesCount: JUPITER_CPI_EXCLUDED_DEXES.length,
   });
 }

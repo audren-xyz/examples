@@ -1,24 +1,29 @@
-//! Audren v1 Offline Solana Transaction v1 (`0x81`) Shielded Deposit Wire Builder (Rust SDK — `audren-client`).
+//! Audren v1.3.0 Offline Solana Transaction v1 (`0x81`) Zero-Crank Shielded Deposit Wire Builder (Rust SDK — `audren-client`).
 //!
 //! Compiles and signs a canonical Solana Transaction v1 (`0x81`, `4,096 B`, inline `TransactionConfig`)
-//! bundling `OpenPage` (`SubtreePage`, `SubtreeRootPage`, `MemoPage`), unified `Deposit` (`Tag 3`,
-//! `DEPOSIT_FLAG_NATIVE_SOL` -> atomic `SyncNative` WSOL), and `PublishCheckpoint` (`Tag 4`) into a
-//! single `wincode`-serialized wire packet ready for RPC submission.
+//! with calibrated tight Compute Unit limits (`CU_LIMIT_DEPOSIT + k * CU_LIMIT_OPEN_PAGE`),
+//! automatically prepending idempotent `OpenPage` (`Tag 2`) pre-instructions at page rollover /
+//! `>= 90%` lookahead via `build_auto_open_page_ixs` ahead of unified `Deposit` (`Tag 3`,
+//! `DEPOSIT_FLAG_NATIVE_SOL` -> atomic `SyncNative` WSOL + inline `GlobalRootHistory` update for
+//! instant spendability on confirmation (~400ms today; ~150ms under Alpenglow) with zero cranks).
 //!
 //! Optionally pass `AUDREN_KEYPAIR_PATH=/path/to/keypair.json` to sign with an existing Solana
 //! JSON keypair; otherwise a fresh ephemeral Ed25519 keypair is generated offline.
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use audren_client::{
     audren_circuits::note::derive_stealth_owner,
     audren_core::{
-        instruction::{OPEN_PAGE_KIND_MEMO, OPEN_PAGE_KIND_SUBROOT, OPEN_PAGE_KIND_SUBTREE},
-        AUDREN_PROGRAM_ID, CLASSIC_TOKEN_PROGRAM_ID, WSOL_MINT,
+        AUDREN_PROGRAM_ID, CLASSIC_TOKEN_PROGRAM_ID, CU_LIMIT_DEPOSIT, CU_LIMIT_OPEN_PAGE,
+        WSOL_MINT,
     },
-    instructions::{build_deposit, build_open_page, build_publish_checkpoint, AudrenInstruction},
+    instructions::{
+        build_auto_open_page_ixs, build_deposit, compute_page_rollovers, AudrenInstruction,
+    },
     keys::{encrypt_note_memo, AudrenKeys},
-    pda::{derive_ata, derive_lane_pda, derive_pool_pda, derive_vault_auth_pda},
+    pda::{derive_ata, derive_lane_pda, derive_pool_pda, derive_roots_pda, derive_vault_auth_pda},
 };
 use base64::Engine as _;
 use rand::RngCore;
@@ -93,75 +98,78 @@ fn main() {
     let alice = AudrenKeys::from_seed(&seed);
 
     let (pool_pda, _) = derive_pool_pda(&program_id, pool_id);
+    let (roots_pda, _) = derive_roots_pda(&program_id, pool_id);
     let (vault_auth_pda, _) = derive_vault_auth_pda(&program_id, pool_id);
     let vault_wsol_ata = derive_ata(&vault_auth_pda, &token_prog, &wsol_mint);
     let (lane0_pda, _) = derive_lane_pda(&program_id, pool_id, 0);
+
+    // Simulate a lane at 90%+ lookahead (leaf 250 of 256 in SubtreePage #0) to demonstrate
+    // zero-crank inline auto-OpenPage prepending with calibrated tight CU limits.
+    let next_leaf = 250u64;
+    let nf_count = 0u64;
+    let roll = compute_page_rollovers(next_leaf, 1, nf_count, 0);
+    let auto_open_ixs = build_auto_open_page_ixs(
+        program_id,
+        payer.pubkey(),
+        pool_id,
+        0,
+        next_leaf,
+        nf_count,
+        1,
+        0,
+        &BTreeSet::new(),
+    )
+    .expect("plan auto-OpenPage instructions");
 
     let amount = 1_000_000u64;
     let (tweak, blinding, memo_106) =
         encrypt_note_memo(&alice.view_pk, eph, amount, &WSOL_MINT).expect("valid recipient view_pk");
     let stealth = derive_stealth_owner(alice.spend_pk, tweak);
 
-    let ixs = vec![
-        to_sol_ix(build_open_page(
-            program_id,
-            payer.pubkey(),
-            OPEN_PAGE_KIND_SUBTREE,
-            pool_id,
-            0,
-            0,
-        )),
-        to_sol_ix(build_open_page(
-            program_id,
-            payer.pubkey(),
-            OPEN_PAGE_KIND_SUBROOT,
-            pool_id,
-            0,
-            0,
-        )),
-        to_sol_ix(build_open_page(
-            program_id,
-            payer.pubkey(),
-            OPEN_PAGE_KIND_MEMO,
-            pool_id,
-            0,
-            0,
-        )),
-        to_sol_ix(build_deposit(
-            program_id,
-            payer.pubkey(),
-            pool_id,
-            wsol_mint,
-            payer.pubkey(),
-            vault_wsol_ata,
-            token_prog,
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            true,
-            false,
-            amount,
-            stealth,
-            blinding,
-            &memo_106,
-            &[],
-        )),
-        to_sol_ix(build_publish_checkpoint(program_id, payer.pubkey(), pool_id, 0, 4)),
-    ];
+    let mut ixs: Vec<Instruction> = auto_open_ixs.into_iter().map(to_sol_ix).collect();
+    let auto_open_count = ixs.len();
+    ixs.push(to_sol_ix(build_deposit(
+        program_id,
+        payer.pubkey(),
+        pool_id,
+        wsol_mint,
+        payer.pubkey(),
+        vault_wsol_ata,
+        token_prog,
+        0,
+        roll.out_sub_seq,
+        roll.out_root_seq,
+        roll.out_memo_seq,
+        roll.next_sub_seq,
+        roll.next_memo_seq,
+        true,
+        false,
+        amount,
+        stealth,
+        blinding,
+        &memo_106,
+        &[],
+    )));
 
-    let wire = compile_v1_tx(&payer, Hash::default(), &ixs, 250_000);
+    let cu_limit = CU_LIMIT_DEPOSIT + (auto_open_count as u32) * CU_LIMIT_OPEN_PAGE;
+    let wire = compile_v1_tx(&payer, Hash::default(), &ixs, cu_limit);
     assert_eq!(wire[0], 0x81, "Solana Transaction v1 wire packet must begin with 0x81");
     let b64 = base64::engine::general_purpose::STANDARD.encode(&wire);
 
     println!("Payer           : {} ({payer_source})", payer.pubkey());
     println!("Program ID      : {program_id}");
     println!("Pool #0 PDA     : {pool_pda}");
+    println!("Roots PDA       : {roots_pda} (inline GlobalRootHistory, 0 cranks)");
     println!("Vault WSOL ATA  : {vault_wsol_ata}");
     println!("Lane #0 PDA     : {lane0_pda}");
-    println!("Alice aud1      : {}", alice.address().encode());
+    println!(
+        "Alice aud1      : {}",
+        alice
+            .address()
+            .encode()
+            .expect("encode valid aud1 address")
+    );
+    println!("Auto-OpenPage   : {auto_open_count} pre-ix(s) | Tight CU Limit: {cu_limit}");
     println!("V1 Tx Wire Size : {} bytes (0x{:02x} prefix)", wire.len(), wire[0]);
     println!("Payload Preview : {}...", &b64[..40]);
 }

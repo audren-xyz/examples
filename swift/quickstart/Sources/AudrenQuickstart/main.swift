@@ -11,8 +11,13 @@ private struct KeyVector: Decodable {
 private struct DefiSessionVector: Decodable {
     let pubkey_b58: String
 }
+private struct PdaAddressVector: Decodable {
+    let address: String
+    let bump: UInt8
+}
 private struct PdaVectors: Decodable {
     let nullifier_hex: String
+    let roots: PdaAddressVector
 }
 private struct AssetIdVectors: Decodable {
     let wsol_asset_id_hex: String
@@ -47,6 +52,10 @@ private struct Groth16Vector: Decodable {
 private struct PoolStateVector: Decodable {
     let raw_hex: String
 }
+private struct RootHistoryVector: Decodable {
+    let raw_hex: String
+    let default_epoch_interval: UInt64
+}
 private struct ConformanceVectors: Decodable {
     let alice: KeyVector
     let alice_sub1: KeyVector
@@ -59,7 +68,7 @@ private struct ConformanceVectors: Decodable {
     let ctx_hashes: CtxHashVectors
     let groth16: Groth16Vector
     let pool_state: PoolStateVector
-    let checkpoint_raw_hex: String
+    let root_history: RootHistoryVector
 }
 
 private func hexToData(_ hex: String) -> Data {
@@ -99,9 +108,11 @@ private let classicTokenProg = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 private let usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 private let wsolMint = "So11111111111111111111111111111111111111112"
 private let systemProgramId = "11111111111111111111111111111111"
+private let rootRingEpoch: UInt8 = 1
 
 private let audrenRepo = ProcessInfo.processInfo.environment["AUDREN_REPO_DIR"]
     ?? URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -134,18 +145,20 @@ print("  FVK nk        : \(dataToHex(fvk.nk))")
 
 // 2. PDAs & ZERO-COPY LAYOUTS
 let poolPda = try derivePoolPda(programId: pid, poolId: poolId).address
+let rootsPda = try deriveRootsPda(programId: pid, poolId: poolId).address
 let vaultAuthPda = try deriveVaultAuthPda(programId: pid, poolId: poolId).address
 let lane2Pda = try deriveLanePda(programId: pid, poolId: poolId, laneId: 2).address
 let escrow5Pda = try deriveEscrowPda(programId: pid, poolId: poolId, shardId: 5).address
+precondition(rootsPda == v.pdas.roots.address)
 let ps = try decodePoolStateAccount(data: hexToData(v.pool_state.raw_hex))
-let ck = try decodeRootCheckpointAccount(data: hexToData(v.checkpoint_raw_hex))
+let roots = try decodeGlobalRootHistoryAccount(data: hexToData(v.root_history.raw_hex))
 
 print("[2/6 PDAs & LAYOUTS]")
-print("  Pool #0 PDA   : \(poolPda) (active_lanes=\(ps.activeLanes), ckpt_interval=\(ps.ckptInterval))")
+print("  Pool #0 PDA   : \(poolPda) (active_lanes=\(ps.activeLanes), root_epoch_interval=\(ps.rootEpochInterval))")
+print("  Roots PDA     : \(rootsPda) (slot_cursor=\(roots.slotCursor), epoch_cursor=\(roots.epochCursor), lane2_leaves=\(roots.stableLaneCounts[2]), super_root=\(dataToHex(roots.stableSuperRoot)))")
 print("  Vault Auth    : \(vaultAuthPda)")
 print("  Lane #2 PDA   : \(lane2Pda)")
 print("  Escrow #5 PDA : \(escrow5Pda)")
-print("  Checkpoint #13: slot_idx=\(ck.slotIdx), lane2_leaves=\(ck.laneCounts[2]), super_root=\(dataToHex(ck.superRoot))")
 
 // 3. MEMOS & ZERO-INDEXER COMPACT STORE
 let amount = v.memo.amount
@@ -238,6 +251,7 @@ let ctxExec = try computeExecCtxHashFfi(params: FfiExecCtxHashParams(
         FfiAccountMeta(pubkeyB58: base58Encode32(0x88), isSigner: false, isWritable: true),
         FfiAccountMeta(pubkeyB58: base58Encode32(0x99), isSigner: false, isWritable: false),
     ],
+    extraWritablePubkeys: [],
     outStealthOwner: enc.stealthOwner,
     outBlinding: enc.blinding,
     dynMemoHead: dynM.dynHead34,
@@ -360,13 +374,22 @@ let depIx = try buildDepositIx(params: FfiDepositParams(
     memo106: enc.memo106,
     transferHookAccounts: []
 ))
+let initRootsIx = try buildInitRootHistoryIx(
+    programId: pid,
+    authority: sess0.pubkeyB58,
+    poolId: poolId,
+    rootEpochInterval: v.root_history.default_epoch_interval,
+    activeLanes: 4
+)
 let proof192 = proved.proof192
+let rootRingIdx = UInt8(roots.epochCursor)
 let txIx = try buildTransactIx(params: FfiTransactParams(
     programId: pid,
     payer: sess0.pubkeyB58,
     poolId: poolId,
     vkId: 0,
-    ckptSlotIdx: 13,
+    rootRingKind: rootRingEpoch,
+    rootRingIdx: rootRingIdx,
     outLaneId: 2,
     outSubSeq: 7,
     outRootSeq: 7,
@@ -375,7 +398,7 @@ let txIx = try buildTransactIx(params: FfiTransactParams(
     nextSubSeq: nil,
     nextMemoSeq: nil,
     nextNfSeq: nil,
-    outputMask: 0b111,
+    outputMask: 0b001,
     assetMode: 0,
     unwrapWsol: false,
     publicMint: nil,
@@ -397,7 +420,8 @@ let txIx = try buildTransactIx(params: FfiTransactParams(
 
 print("[4/6 INSTRUCTIONS & GROTH16]")
 print("  Deposit       : \(depIx.data.count) B (tag=\(depIx.data[0]), native_sol=true, fee_from_amount=true)")
-print("  Transact      : \(txIx.data.count) B (tag=\(txIx.data[0]), proof=\(proof192.count) B Groth16, 1 Tx v1)")
+print("  InitRootHist  : \(initRootsIx.data.count) B (tag=\(initRootsIx.data[0]), root_epoch_interval=\(v.root_history.default_epoch_interval), active_lanes=4)")
+print("  Transact      : \(txIx.data.count) B (tag=\(txIx.data[0]), ring=\(rootRingEpoch):\(rootRingIdx), proof=\(proof192.count) B Groth16, 1 Tx v1)")
 print("  ctx_hash priv : \(dataToHex(ctxPriv))")
 print("  ctx_hash wsol : \(dataToHex(ctxWsol))")
 print("  ctx_hash exec : \(dataToHex(ctxExec))")

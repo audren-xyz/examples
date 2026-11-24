@@ -30,6 +30,7 @@ private const val CLASSIC_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss62
 private const val USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 private const val WSOL_MINT = "So11111111111111111111111111111111111111112"
 private const val SYSTEM_PROGRAM_ID = "11111111111111111111111111111111"
+private val ROOT_RING_EPOCH: UByte = 1u
 
 fun main() {
     val audrenRepo = System.getenv("AUDREN_REPO_DIR")
@@ -60,18 +61,21 @@ fun main() {
 
     // 2. PDAs & ZERO-COPY LAYOUTS
     val poolPda = derivePoolPda(pid, poolId).address
+    val rootsPda = deriveRootsPda(pid, poolId).address
     val vaultAuthPda = deriveVaultAuthPda(pid, poolId).address
     val lane2Pda = deriveLanePda(pid, poolId, 2u).address
     val escrow5Pda = deriveEscrowPda(pid, poolId, 5u).address
+    check(rootsPda == v.getJSONObject("pdas").getJSONObject("roots").getString("address"))
     val ps = decodePoolStateAccount(hexToBytes(v.getJSONObject("pool_state").getString("raw_hex")))
-    val ck = decodeRootCheckpointAccount(hexToBytes(v.getString("checkpoint_raw_hex")))
+    val rootHistoryJson = v.getJSONObject("root_history")
+    val roots = decodeGlobalRootHistoryAccount(hexToBytes(rootHistoryJson.getString("raw_hex")))
 
     println("[2/6 PDAs & LAYOUTS]")
-    println("  Pool #0 PDA   : $poolPda (active_lanes=${ps.activeLanes}, ckpt_interval=${ps.ckptInterval})")
+    println("  Pool #0 PDA   : $poolPda (active_lanes=${ps.activeLanes}, root_epoch_interval=${ps.rootEpochInterval})")
+    println("  Roots PDA     : $rootsPda (slot_cursor=${roots.slotCursor}, epoch_cursor=${roots.epochCursor}, lane2_leaves=${roots.stableLaneCounts[2]}, super_root=${bytesToHex(roots.stableSuperRoot)})")
     println("  Vault Auth    : $vaultAuthPda")
     println("  Lane #2 PDA   : $lane2Pda")
     println("  Escrow #5 PDA : $escrow5Pda")
-    println("  Checkpoint #13: slot_idx=${ck.slotIdx}, lane2_leaves=${ck.laneCounts[2]}, super_root=${bytesToHex(ck.superRoot)}")
 
     // 3. MEMOS & ZERO-INDEXER COMPACT STORE
     val memoJson = v.getJSONObject("memo")
@@ -171,6 +175,7 @@ fun main() {
                 FfiAccountMeta(base58Encode32(0x88), false, true),
                 FfiAccountMeta(base58Encode32(0x99), false, false)
             ),
+            extraWritablePubkeys = emptyList(),
             outStealthOwner = enc.stealthOwner,
             outBlinding = enc.blinding,
             dynMemoHead = dynM.dynHead34,
@@ -292,14 +297,24 @@ fun main() {
             transferHookAccounts = emptyList()
         )
     )
+    val defaultEpochInterval = rootHistoryJson.getLong("default_epoch_interval").toULong()
+    val initRootsIx = buildInitRootHistoryIx(
+        programId = pid,
+        authority = sess0.pubkeyB58,
+        poolId = poolId,
+        rootEpochInterval = defaultEpochInterval,
+        activeLanes = 4u
+    )
     val proof192 = proved.proof192
+    val rootRingIdx = roots.epochCursor.toUByte()
     val txIx = buildTransactIx(
         FfiTransactParams(
             programId = pid,
             payer = sess0.pubkeyB58,
             poolId = poolId,
             vkId = 0u,
-            ckptSlotIdx = 13u,
+            rootRingKind = ROOT_RING_EPOCH,
+            rootRingIdx = rootRingIdx,
             outLaneId = 2u,
             outSubSeq = 7uL,
             outRootSeq = 7uL,
@@ -308,7 +323,7 @@ fun main() {
             nextSubSeq = null,
             nextMemoSeq = null,
             nextNfSeq = null,
-            outputMask = 7u,
+            outputMask = 1u,
             assetMode = 0u,
             unwrapWsol = false,
             publicMint = null,
@@ -331,7 +346,8 @@ fun main() {
 
     println("[4/6 INSTRUCTIONS & GROTH16]")
     println("  Deposit       : ${depIx.data.size} B (tag=${depIx.data[0].toInt() and 0xff}, native_sol=true, fee_from_amount=true)")
-    println("  Transact      : ${txIx.data.size} B (tag=${txIx.data[0].toInt() and 0xff}, proof=${proof192.size} B Groth16, 1 Tx v1)")
+    println("  InitRootHist  : ${initRootsIx.data.size} B (tag=${initRootsIx.data[0].toInt() and 0xff}, root_epoch_interval=$defaultEpochInterval, active_lanes=4)")
+    println("  Transact      : ${txIx.data.size} B (tag=${txIx.data[0].toInt() and 0xff}, ring=$ROOT_RING_EPOCH:$rootRingIdx, proof=${proof192.size} B Groth16, 1 Tx v1)")
     println("  ctx_hash priv : ${bytesToHex(ctxPriv)}")
     println("  ctx_hash wsol : ${bytesToHex(ctxWsol)}")
     println("  ctx_hash exec : ${bytesToHex(ctxExec)}")
