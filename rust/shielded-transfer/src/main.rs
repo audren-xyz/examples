@@ -5,7 +5,7 @@
 //! automatically prepending idempotent `OpenPage` (`Tag 2`) pre-instructions at page rollover /
 //! `>= 90%` lookahead via `build_auto_open_page_ixs` ahead of unified `Deposit` (`Tag 3`,
 //! `DEPOSIT_FLAG_NATIVE_SOL` -> atomic `SyncNative` WSOL + inline `GlobalRootHistory` update for
-//! instant spendability on confirmation (~400ms today; ~150ms under Alpenglow) with zero cranks).
+//! instant spendability on `~150ms` Alpenglow confirmation with zero cranks).
 //!
 //! Optionally pass `AUDREN_KEYPAIR_PATH=/path/to/keypair.json` to sign with an existing Solana
 //! JSON keypair; otherwise a fresh ephemeral Ed25519 keypair is generated offline.

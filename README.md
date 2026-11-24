@@ -21,9 +21,9 @@ Standardized, runnable examples across all **4 official Audren SDKs — Rust, Ty
 
 - **Program ID:** `AUDRBK6kVkQoEGm3EB7swd34SUPqrHZeNEkB5vZWVSv3` (`PROTOCOL_VERSION = 1`, release `1.3.0`)
 - **Canonical Pool `#0` PDA (`audren_pool`):** `5Bvt5f5QMfsVb9TyX8bzkRMvAX6JSWwRtnymGveF9U3G`
-- **Canonical `GlobalRootHistory` `#0` PDA (`audren_roots`):** `249YJTuRtiKAnh346Tc18kF9bHrktdrTzyJMtvUKUgC7` (bump `254`, `10,216 B` `AUD1RT01` dual-ring instant spendability on confirmation — `~400ms` today, `~150ms` under Alpenglow — zero cranks)
+- **Canonical `GlobalRootHistory` `#0` PDA (`audren_roots`):** `249YJTuRtiKAnh346Tc18kF9bHrktdrTzyJMtvUKUgC7` (bump `254`, `10,216 B` `AUD1RT01` dual-ring instant spendability on `~150ms` Alpenglow confirmation, zero cranks)
 - **Canonical Vault Authority `#0` PDA (`audren_vault_auth`):** `3aMtBvVMatfBvoBWQaTxCPwQ2SWyW5ejceVgLFTtk2WF`
-- **Canonical Pool `#0` ALTs (`40` entries, frozen):** Mainnet `Db1aWwM1Tat54Pm3fHdAwYxL6jDWWJzfe3MUR28M3nZ6` · Devnet `A5FrkN6y3AcMh6fdyp489gTUhPFvVuhmyHTLN3H8esBe`
+- **Canonical Pool `#0` ALTs (`73` entries, frozen):** Mainnet `CJgLKw3FTErb3MhmkphyMv28gBxmqSfjfATXypabmL3A` · Devnet `7bwvhuVsmjjXJ1ZPMw2RQpkdwnYKy7upobbdV4FKrCry`
 - **Core Protocol & 4 Official SDKs:** [`audren-xyz/audren`](https://github.com/audren-xyz/audren)
 - **Canonical Conformance Vectors:** [`spec/test-vectors.json`](https://github.com/audren-xyz/audren/blob/main/spec/test-vectors.json)
 

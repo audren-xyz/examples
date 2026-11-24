@@ -6,7 +6,7 @@
  * calls using zero off-chain indexers (`privacyMode: 'strict'` default with Rendezvous HRW wallet-keyed
  * decoys; pass `AUDREN_PRIVACY_MODE=fast` for opt-in `[0..3,328]` SoA `dataSlice` pre-filtering on large
  * catch-ups over a trusted RPC), and reads live dual-ring `GlobalRootHistory` (`finalized`-first +
- * `confirmed`-fallback) for instant spendability on confirmation (~400ms today; ~150ms under Alpenglow) with zero cranks.
+ * `confirmed`-fallback) for instant spendability on ~150ms Alpenglow confirmation with zero cranks.
  *
  * Run (from `typescript/`):
  *   SOLANA_RPC_URL="https://your-solana-rpc" pnpm scan
