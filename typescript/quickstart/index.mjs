@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
@@ -70,8 +70,20 @@ const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const toHex = (b) => Buffer.from(b).toString('hex');
 const fromHex = (h) => new Uint8Array(Buffer.from(h, 'hex'));
 
-const audrenRepo = process.env.AUDREN_REPO_DIR ?? resolve(import.meta.dirname, '../../../audren');
-const v = JSON.parse(readFileSync(resolve(audrenRepo, 'spec/test-vectors.json'), 'utf8'));
+function findVectorsPath() {
+  const candidates = [
+    ...(process.env.AUDREN_REPO_DIR
+      ? [resolve(process.env.AUDREN_REPO_DIR, 'spec/test-vectors.json')]
+      : []),
+    resolve(import.meta.dirname, '../../spec/test-vectors.json'),
+    resolve(import.meta.dirname, '../../../audren/spec/test-vectors.json'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error('spec/test-vectors.json not found; set AUDREN_REPO_DIR=/path/to/audren');
+}
+const v = JSON.parse(readFileSync(findVectorsPath(), 'utf8'));
 const poolId = 0;
 
 // 1. KEYS & COMPLIANCE

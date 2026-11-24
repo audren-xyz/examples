@@ -33,9 +33,14 @@ private const val SYSTEM_PROGRAM_ID = "11111111111111111111111111111111"
 private val ROOT_RING_EPOCH: UByte = 1u
 
 fun main() {
-    val audrenRepo = System.getenv("AUDREN_REPO_DIR")
-        ?: File("../../../audren").canonicalPath
-    val v = JSONObject(File("$audrenRepo/spec/test-vectors.json").readText())
+    val envRepo = System.getenv("AUDREN_REPO_DIR")?.takeIf { it.isNotBlank() }
+    val specFile = listOfNotNull(
+        envRepo?.let { File("$it/spec/test-vectors.json") },
+        File("../../spec/test-vectors.json"),
+        File("../../../audren/spec/test-vectors.json"),
+    ).firstOrNull { it.isFile }
+        ?: error("spec/test-vectors.json not found; set AUDREN_REPO_DIR=/path/to/audren")
+    val v = JSONObject(specFile.readText())
 
     val pid = canonicalProgramId()
     val poolId = 0u

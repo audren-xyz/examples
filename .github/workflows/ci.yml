@@ -53,6 +53,7 @@ jobs:
           pnpm --dir examples/typescript install
           pnpm --dir examples/typescript --silent quickstart | tee /tmp/out-ts.txt
           pnpm --dir examples/typescript swap-plan
+          pnpm --dir examples/typescript kamino-defi
           node --check examples/typescript/dataslice-scanner/index.mjs
       - name: Build native libaudren_ffi.so for Kotlin quickstart
         working-directory: audren

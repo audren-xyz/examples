@@ -68,6 +68,7 @@ fn find_vectors_path() -> PathBuf {
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for rel in [
+        "../../spec/test-vectors.json",
         "../../../audren/spec/test-vectors.json",
         "../../audren/spec/test-vectors.json",
     ] {

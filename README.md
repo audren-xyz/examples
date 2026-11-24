@@ -32,7 +32,7 @@ Standardized, runnable examples across all **4 official Audren SDKs — Rust, Ty
 | Language | Quickstart Path | Official SDK Consumed | Additional Examples |
 | --- | --- | --- | --- |
 | **Rust** | [`rust/quickstart`](./rust/quickstart) | `audren-client` + `audren-core` | [`rust/shielded-transfer`](./rust/shielded-transfer) (zero-crank auto-`OpenPage` + Transaction v1 `0x81` with tight CU limits), [`rust/institutional-audit`](./rust/institutional-audit) (Mode 1 & Mode 2) |
-| **TypeScript** | [`typescript/quickstart`](./typescript/quickstart) | `@audren/sdk` + `@audren/sdk/prover` (WASM) | [`typescript/dataslice-scanner`](./typescript/dataslice-scanner) (zero-indexer `CompactWalletStore` + `GlobalRootHistory` RPC sync), [`typescript/jupiter-private-swap`](./typescript/jupiter-private-swap) (`ExecViaEscrow` Tag 6 + tight CU limits) |
+| **TypeScript** | [`typescript/quickstart`](./typescript/quickstart) | `@audren/sdk` + `@audren/sdk/prover` (WASM) | [`typescript/dataslice-scanner`](./typescript/dataslice-scanner) (zero-indexer `CompactWalletStore` + `GlobalRootHistory` RPC sync), [`typescript/jupiter-private-swap`](./typescript/jupiter-private-swap) (`ExecViaEscrow` Tag 6 + tight CU limits), [`typescript/kamino-private-defi`](./typescript/kamino-private-defi) (Kamino Lending supply/redeem & Kamino Prime USDC Yield Vault deposit/withdraw via `ExecViaEscrow` Tag 6) |
 | **Swift (iOS / macOS)** | [`swift/quickstart`](./swift/quickstart) | `AudrenSDK` (`packages/swift` via UniFFI) | — |
 | **Kotlin (Android / JVM)** | [`kotlin/quickstart`](./kotlin/quickstart) | `xyz.audren.sdk` (`packages/kotlin` via UniFFI + JNA) | — |
 
@@ -60,6 +60,7 @@ pnpm --dir audren/packages/sdk install --frozen-lockfile && pnpm --dir audren/pa
 pnpm --dir examples/typescript install
 pnpm --dir examples/typescript quickstart
 pnpm --dir examples/typescript swap-plan
+pnpm --dir examples/typescript kamino-defi
 SOLANA_RPC_URL="https://your-solana-rpc" pnpm --dir examples/typescript scan
 ```
 

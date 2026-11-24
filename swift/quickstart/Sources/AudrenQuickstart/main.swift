@@ -110,16 +110,25 @@ private let wsolMint = "So11111111111111111111111111111111111111112"
 private let systemProgramId = "11111111111111111111111111111111"
 private let rootRingEpoch: UInt8 = 1
 
-private let audrenRepo = ProcessInfo.processInfo.environment["AUDREN_REPO_DIR"]
-    ?? URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("audren").path
-private let specUrl = URL(fileURLWithPath: audrenRepo).appendingPathComponent("spec/test-vectors.json")
+private let examplesRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+private let specUrl: URL = {
+    let fm = FileManager.default
+    var candidates: [URL] = []
+    if let envDir = ProcessInfo.processInfo.environment["AUDREN_REPO_DIR"], !envDir.isEmpty {
+        candidates.append(URL(fileURLWithPath: envDir).appendingPathComponent("spec/test-vectors.json"))
+    }
+    candidates.append(examplesRoot.appendingPathComponent("spec/test-vectors.json"))
+    candidates.append(examplesRoot.deletingLastPathComponent().appendingPathComponent("audren/spec/test-vectors.json"))
+    for url in candidates where fm.fileExists(atPath: url.path) {
+        return url
+    }
+    fatalError("Missing spec/test-vectors.json; clone sibling audren repo or set AUDREN_REPO_DIR=/path/to/audren")
+}()
 private let v = try JSONDecoder().decode(ConformanceVectors.self, from: Data(contentsOf: specUrl))
 
 let pid = canonicalProgramId()
