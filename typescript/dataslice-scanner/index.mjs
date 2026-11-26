@@ -34,9 +34,17 @@ if (!rpcUrl) {
   process.exit(1);
 }
 
-const seed = process.env.AUDREN_SEED_HEX
-  ? new Uint8Array(Buffer.from(process.env.AUDREN_SEED_HEX, 'hex'))
-  : new Uint8Array(randomBytes(32));
+let seed;
+if (process.env.AUDREN_SEED_HEX) {
+  const cleanHex = process.env.AUDREN_SEED_HEX.trim().replace(/^0x/i, '');
+  if (!/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
+    console.error('AUDREN_SEED_HEX must be exactly 64 hex characters (32 bytes).');
+    process.exit(1);
+  }
+  seed = new Uint8Array(Buffer.from(cleanHex, 'hex'));
+} else {
+  seed = new Uint8Array(randomBytes(32));
+}
 
 const keys = deriveKeysFromSeed(seed);
 const fvk = exportFullViewingKey(keys);

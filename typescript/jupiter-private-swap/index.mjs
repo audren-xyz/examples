@@ -61,6 +61,7 @@ if (process.env.LIVE_QUOTE === '1') {
     outputMint: WSOL_MINT,
     cluster: 'mainnet',
     shardId: 0,
+    ...(quoteRes.relayerPubkey ? { relayerPubkey: quoteRes.relayerPubkey } : {}),
   });
   const prepared = await prepareEscrowAccounts({
     poolId: 0,

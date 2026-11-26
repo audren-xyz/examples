@@ -5,3 +5,10 @@ members = [
     "shielded-transfer",
     "institutional-audit",
 ]
+
+# Avoid debug-mode stack overflow in light-poseidon::get_poseidon_parameters (~1.21 MiB frame unoptimized).
+[profile.dev.package.light-poseidon]
+opt-level = 2
+
+[profile.dev.package.ark-ff]
+opt-level = 2

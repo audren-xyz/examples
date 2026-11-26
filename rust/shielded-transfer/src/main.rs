@@ -16,8 +16,8 @@ use std::fs;
 use audren_client::{
     audren_circuits::note::derive_stealth_owner,
     audren_core::{
-        AUDREN_PROGRAM_ID, CLASSIC_TOKEN_PROGRAM_ID, CU_LIMIT_DEPOSIT, CU_LIMIT_OPEN_PAGE,
-        WSOL_MINT,
+        instruction::OPEN_PAGE_WIRE_LEN, AUDREN_PROGRAM_ID, CLASSIC_TOKEN_PROGRAM_ID,
+        CU_LIMIT_DEPOSIT, CU_LIMIT_OPEN_PAGE, WSOL_MINT,
     },
     instructions::{
         build_auto_open_page_ixs, build_deposit, compute_page_rollovers, AudrenInstruction,
@@ -128,6 +128,12 @@ fn main() {
 
     let mut ixs: Vec<Instruction> = auto_open_ixs.into_iter().map(to_sol_ix).collect();
     let auto_open_count = ixs.len();
+    assert!(auto_open_count >= 1, "expected >= 1 lookahead OpenPage ix");
+    assert_eq!(
+        ixs[0].data.len(),
+        OPEN_PAGE_WIRE_LEN,
+        "OpenPage must use v1.3.0 23 B wire layout with max_payer_deficit"
+    );
     ixs.push(to_sol_ix(build_deposit(
         program_id,
         payer.pubkey(),
