@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule:
+      interval: weekly
+    ignore:
+      # Upstream ark-relations 0.5.1 (used by audren-circuits) requires tracing-subscriber ^0.2.
+      - dependency-name: tracing-subscriber
+        update-types:
+          - version-update:semver-major
+  - package-ecosystem: npm
+    directory: /typescript
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
