@@ -6,6 +6,6 @@ license = "Apache-2.0"
 
 [dependencies]
 audren-client = { git = "https://github.com/audren-xyz/audren.git", branch = "main" }
-ark-bn254 = { version = "=0.5.0", default-features = false, features = ["curve"] }
+ark-bn254 = { version = "=0.6.0", default-features = false, features = ["curve"] }
 serde_json = "1"
 solana-address = { version = "~2.7.0", features = ["copy", "curve25519", "std"] }
