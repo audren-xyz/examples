@@ -134,7 +134,7 @@ private let v = try JSONDecoder().decode(ConformanceVectors.self, from: Data(con
 let pid = canonicalProgramId()
 let poolId: UInt32 = 0
 
-// 1. KEYS & COMPLIANCE
+// 1. KEYS & COMPLIANCE (TEST VECTOR ONLY: never use deterministic seeds in production; use SecRandomCopyBytes)
 let aliceSeed = hexToData(v.alice.seed_hex)
 let alice = try deriveKeysFromSeed(seed: aliceSeed)
 let aliceSub1 = try deriveSubaccountKeys(seed: aliceSeed, accountIndex: 1)
@@ -355,6 +355,7 @@ witness.append(u64Le(0))
 witness.append(u64Be32(0x203))
 precondition(witness.count == 4611)
 
+// TEST VECTOR ONLY: deterministic prover seed reproduces spec/test-vectors.json; pass OS CSPRNG bytes in production.
 let proved = try proveJoinsplitWitnessBytes(witness4611: witness, seed32: Data(repeating: 0x99, count: 32))
 precondition(dataToHex(proved.proof192) == v.groth16.proof_192_hex)
 precondition(dataToHex(proved.nf0) == v.groth16.nf0_hex)
@@ -392,6 +393,8 @@ let initRootsIx = try buildInitRootHistoryIx(
 )
 let proof192 = proved.proof192
 let rootRingIdx = UInt8(roots.epochCursor)
+// Canonical privacy-padded 3-output private Transact (`outputMask = 0b111`, 3 * 106 B memos).
+let memos3 = enc.memo106 + enc.memo106 + enc.memo106
 let txIx = try buildTransactIx(params: FfiTransactParams(
     programId: pid,
     payer: sess0.pubkeyB58,
@@ -407,7 +410,7 @@ let txIx = try buildTransactIx(params: FfiTransactParams(
     nextSubSeq: nil,
     nextMemoSeq: nil,
     nextNfSeq: nil,
-    outputMask: 0b001,
+    outputMask: 0b111,
     assetMode: 0,
     unwrapWsol: false,
     publicMint: nil,
@@ -423,7 +426,7 @@ let txIx = try buildTransactIx(params: FfiTransactParams(
     relayerFeeAmount: 0,
     recipient: systemProgramId,
     relayerFeeRecipient: systemProgramId,
-    memosBytes: enc.memo106,
+    memosBytes: memos3,
     transferHookAccounts: []
 ))
 

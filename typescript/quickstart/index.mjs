@@ -86,7 +86,7 @@ function findVectorsPath() {
 const v = JSON.parse(readFileSync(findVectorsPath(), 'utf8'));
 const poolId = 0;
 
-// 1. KEYS & COMPLIANCE
+// 1. KEYS & COMPLIANCE (TEST VECTOR ONLY: never use deterministic seeds in production; use crypto.getRandomValues)
 const aliceSeed = fromHex(v.alice.seed_hex);
 const bobSeed = fromHex(v.bob.seed_hex);
 const alice = deriveKeysFromSeed(aliceSeed);
@@ -238,6 +238,7 @@ const path5 = buildHistoricalWitness4Ary({
   frontierPageLeaves: leaves,
 });
 
+// TEST VECTOR ONLY: deterministic prover seed reproduces spec/test-vectors.json; omit seed32 (CSPRNG) in production.
 const prover = await AudrenWasmProver.init();
 const proved = prover.proveJoinsplit(
   {
@@ -301,6 +302,11 @@ const initRootsIx = buildInitRootHistoryInstruction({
   activeLanes: 4,
 });
 const rootRingIdx = roots.epochCursor;
+// Canonical privacy-padded 3-output private Transact (`outputMask = 0b111`, 3 * 106 B memos).
+const memos3 = new Uint8Array(memo.length * 3);
+memos3.set(memo, 0);
+memos3.set(memo, memo.length);
+memos3.set(memo, memo.length * 2);
 const txIx = buildTransactInstruction({
   payer: sess0.pubkeyBase58,
   poolId,
@@ -312,7 +318,7 @@ const txIx = buildTransactInstruction({
   outRootSeq: 7n,
   outMemoSeq: 7n,
   outNfSeq: 7n,
-  outputMask: 0b001,
+  outputMask: 0b111,
   assetMode: ASSET_MODE_PRIVATE,
   unwrapWsol: false,
   proof192: proved.proof192,
@@ -325,7 +331,7 @@ const txIx = buildTransactInstruction({
   relayerFeeAmount: 0n,
   recipient: SYSTEM_PROGRAM_ID,
   relayerFeeRecipient: SYSTEM_PROGRAM_ID,
-  memosBytes: memo,
+  memosBytes: memos3,
 });
 
 console.log('[4/6 INSTRUCTIONS & GROTH16]');

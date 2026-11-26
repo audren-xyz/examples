@@ -89,7 +89,7 @@ fn main() {
     let wsol_mint = Address::new_from_array(WSOL_MINT);
     let pool_id = 0u32;
 
-    // 1. KEYS & COMPLIANCE
+    // 1. KEYS & COMPLIANCE (TEST VECTOR ONLY: never use deterministic seeds in production; use OsRng)
     let alice_seed = decode_hex_arr::<32>(v["alice"]["seed_hex"].as_str().unwrap());
     let bob_seed = decode_hex_arr::<32>(v["bob"]["seed_hex"].as_str().unwrap());
     let alice = AudrenKeys::from_seed(&alice_seed);
@@ -340,6 +340,7 @@ fn main() {
             JoinSplitOutputWitness::dummy(wsol_asset, Fr::from(0x203u64)),
         ],
     );
+    // TEST VECTOR ONLY: deterministic prover seed reproduces spec/test-vectors.json; use `prove()` (OsRng) in production.
     let prover = AudrenProver::from_canonical_pk();
     let proved = prover.prove_with_seed(circuit, [0x99u8; 32]);
     assert_eq!(
@@ -378,6 +379,8 @@ fn main() {
         4,
     );
     let root_ring_idx = roots.epoch_cursor as u8;
+    // Canonical privacy-padded 3-output private Transact (`output_mask = 0b111`, 3 * 106 B memos).
+    let memos_3 = [&memo_106[..], &memo_106[..], &memo_106[..]].concat();
     let tx_ix = build_transact(
         program_id,
         sess0_addr,
@@ -390,7 +393,7 @@ fn main() {
         7,
         7,
         7,
-        0b001,
+        0b111,
         ASSET_MODE_PRIVATE,
         false,
         None,
@@ -405,7 +408,7 @@ fn main() {
         0,
         Address::new_from_array([0u8; 32]),
         Address::new_from_array([0u8; 32]),
-        &memo_106,
+        &memos_3,
         &[],
     );
 

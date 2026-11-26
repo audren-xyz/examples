@@ -21,6 +21,8 @@ fn to_hex(b: &[u8]) -> String {
 }
 
 fn main() {
+    // TEST VECTOR ONLY: deterministic seed for reproducible offline demo output.
+    // Production wallets MUST generate seeds and ephemeral secrets from `rand::rngs::OsRng`.
     let mut rng = StdRng::seed_from_u64(0x4155_4452_454E_0001);
     let mut treasury_seed = [0u8; 32];
     let mut eph_secret = [0u8; 32];

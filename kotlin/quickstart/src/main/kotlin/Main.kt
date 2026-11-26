@@ -45,7 +45,7 @@ fun main() {
     val pid = canonicalProgramId()
     val poolId = 0u
 
-    // 1. KEYS & COMPLIANCE
+    // 1. KEYS & COMPLIANCE (TEST VECTOR ONLY: never use deterministic seeds in production; use SecureRandom)
     val aliceJson = v.getJSONObject("alice")
     val aliceSeed = hexToBytes(aliceJson.getString("seed_hex"))
     val alice = deriveKeysFromSeed(aliceSeed)
@@ -272,6 +272,7 @@ fun main() {
 
     val witnessBytes = w.toByteArray()
     check(witnessBytes.size == 4611)
+    // TEST VECTOR ONLY: deterministic prover seed reproduces spec/test-vectors.json; pass SecureRandom bytes in production.
     val proved = proveJoinsplitWitnessBytes(witnessBytes, ByteArray(32) { 0x99.toByte() })
     check(bytesToHex(proved.proof192) == g16.getString("proof_192_hex"))
     check(bytesToHex(proved.nf0) == g16.getString("nf0_hex"))
@@ -312,6 +313,8 @@ fun main() {
     )
     val proof192 = proved.proof192
     val rootRingIdx = roots.epochCursor.toUByte()
+    // Canonical privacy-padded 3-output private Transact (`outputMask = 7u`, 3 * 106 B memos).
+    val memos3 = enc.memo106 + enc.memo106 + enc.memo106
     val txIx = buildTransactIx(
         FfiTransactParams(
             programId = pid,
@@ -328,7 +331,7 @@ fun main() {
             nextSubSeq = null,
             nextMemoSeq = null,
             nextNfSeq = null,
-            outputMask = 1u,
+            outputMask = 7u,
             assetMode = 0u,
             unwrapWsol = false,
             publicMint = null,
@@ -344,7 +347,7 @@ fun main() {
             relayerFeeAmount = 0uL,
             recipient = SYSTEM_PROGRAM_ID,
             relayerFeeRecipient = SYSTEM_PROGRAM_ID,
-            memosBytes = enc.memo106,
+            memosBytes = memos3,
             transferHookAccounts = emptyList()
         )
     )

@@ -265,8 +265,14 @@ async function buildAndVerifyExecFlow({
   return { prepared, ctxHash, ix };
 }
 
+// Compute a realistic slippage-protected `minAmountOut` from an expected exchange rate
+// (never pass `minAmountOut: 1n` on Mainnet, which disables sandwich/slippage protection).
+const applySlippage = (expectedOut, slippageBps = 100n) =>
+  (expectedOut * (10_000n - slippageBps)) / 10_000n;
+
 // 1a. Kamino Lending Supply (USDC -> cUSDC, input-leg USDC relayer fee)
 const klendSupplyAmount = 2_500_000n;
+const expectedKlendCUsdcOut = 2_320_000n; // quoted from Kamino reserve exchange rate
 const klendSupply = await buildAndVerifyExecFlow({
   outLaneId: 0,
   inMint: USDC_MINT,
@@ -278,7 +284,7 @@ const klendSupply = await buildAndVerifyExecFlow({
   escrowInAta: escrowUsdcAta,
   escrowOutAta: escrowCUsdcAta,
   amountIn: klendSupplyAmount,
-  minAmountOut: 1n,
+  minAmountOut: applySlippage(expectedKlendCUsdcOut, 100n),
   feeOnOutput: false,
   relayerFeeAmount: 200_000n,
   routerProg: KLEND_PROGRAM_ID,
@@ -303,6 +309,7 @@ const klendSupply = await buildAndVerifyExecFlow({
 
 // 1b. Kamino Lending Redeem (cUSDC -> USDC, EXEC_FLAG_FEE_ON_OUTPUT paying relayer in USDC)
 const klendRedeemCollateral = 2_000_000n;
+const expectedKlendUsdcOut = 2_150_000n; // quoted from Kamino reserve exchange rate
 const klendRedeem = await buildAndVerifyExecFlow({
   outLaneId: 1,
   inMint: KLEND_CUSDC_MINT,
@@ -314,7 +321,7 @@ const klendRedeem = await buildAndVerifyExecFlow({
   escrowInAta: escrowCUsdcAta,
   escrowOutAta: escrowUsdcAta,
   amountIn: klendRedeemCollateral,
-  minAmountOut: 1n,
+  minAmountOut: applySlippage(expectedKlendUsdcOut - 200_000n, 100n),
   feeOnOutput: true,
   relayerFeeAmount: 200_000n,
   routerProg: KLEND_PROGRAM_ID,
@@ -339,6 +346,7 @@ const klendRedeem = await buildAndVerifyExecFlow({
 
 // 2a. Kamino Prime USDC Yield Vault Deposit (USDC -> Prime USDC shares)
 const vaultDepositAmount = 2_500_000n;
+const expectedVaultSharesOut = 2_380_000n; // quoted from Kamino Vault share price
 const vaultDeposit = await buildAndVerifyExecFlow({
   outLaneId: 2,
   inMint: USDC_MINT,
@@ -350,7 +358,7 @@ const vaultDeposit = await buildAndVerifyExecFlow({
   escrowInAta: escrowUsdcAta,
   escrowOutAta: escrowSharesAta,
   amountIn: vaultDepositAmount,
-  minAmountOut: 1n,
+  minAmountOut: applySlippage(expectedVaultSharesOut, 100n),
   feeOnOutput: false,
   relayerFeeAmount: 200_000n,
   routerProg: KVAULT_PROGRAM_ID,
@@ -378,6 +386,7 @@ const vaultDeposit = await buildAndVerifyExecFlow({
 
 // 2b. Kamino Prime USDC Yield Vault Withdraw (Prime shares -> USDC, EXEC_FLAG_FEE_ON_OUTPUT)
 const vaultWithdrawShares = 2_300_000n;
+const expectedVaultUsdcOut = 2_410_000n; // quoted from Kamino Vault share price
 const vaultWithdraw = await buildAndVerifyExecFlow({
   outLaneId: 3,
   inMint: KVAULT_PRIME_USDC_SHARES_MINT,
@@ -389,7 +398,7 @@ const vaultWithdraw = await buildAndVerifyExecFlow({
   escrowInAta: escrowSharesAta,
   escrowOutAta: escrowUsdcAta,
   amountIn: vaultWithdrawShares,
-  minAmountOut: 1n,
+  minAmountOut: applySlippage(expectedVaultUsdcOut - 200_000n, 100n),
   feeOnOutput: true,
   relayerFeeAmount: 200_000n,
   routerProg: KVAULT_PROGRAM_ID,

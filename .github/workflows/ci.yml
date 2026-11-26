@@ -10,6 +10,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   rust-ts-kotlin-parity:
     name: Rust, TypeScript (WASM) & Kotlin Examples (+ Cross-SDK Parity)
@@ -34,6 +41,7 @@ jobs:
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
+          set -euo pipefail
           cargo clippy --manifest-path examples/rust/Cargo.toml --all-targets -- -D warnings
           cargo run --release --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
           cargo run --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-institutional-audit
@@ -48,6 +56,7 @@ jobs:
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
+          set -euo pipefail
           pnpm --dir audren/packages/sdk install --frozen-lockfile
           pnpm --dir audren/packages/sdk build
           pnpm --dir examples/typescript install
@@ -69,9 +78,12 @@ jobs:
         working-directory: examples/kotlin/quickstart
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
-        run: gradle -q run --no-daemon | tee /tmp/out-kotlin.txt
+        run: |
+          set -euo pipefail
+          gradle -q run --no-daemon | tee /tmp/out-kotlin.txt
       - name: Enforce byte-for-byte canonical parity across Rust, TypeScript & Kotlin
         run: |
+          set -euo pipefail
           diff -u /tmp/out-rust.txt /tmp/out-ts.txt
           diff -u /tmp/out-rust.txt /tmp/out-kotlin.txt
           echo "100% byte-for-byte canonical stdout parity verified: Rust == TypeScript == Kotlin"
@@ -99,6 +111,7 @@ jobs:
         env:
           AUDREN_REPO_DIR: ${{ github.workspace }}/audren
         run: |
+          set -euo pipefail
           (cd audren && cargo build -p audren-ffi --release)
           cargo run --release --quiet --manifest-path examples/rust/Cargo.toml -p audren-example-quickstart | tee /tmp/out-rust.txt
           (cd examples/swift/quickstart && swift run -q 2>/dev/null || swift run) > /tmp/out-swift-raw.txt
